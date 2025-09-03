@@ -1,6 +1,6 @@
 services:
   server:
-    image: nfttools/bidding-bot-server-production:latest
+    image: nfttools/bidding-bot-server-beta-single:beta-single
     platform: linux/amd64
     restart: always
     mem_limit: 4608m
@@ -38,7 +38,7 @@ services:
       - server_data:/app/data
 
   client:
-    image: nfttools/bidding-bot-client-production:latest
+    image: nfttools/bidding-bot-client-beta-single:beta-single
     platform: linux/amd64
     restart: always
     mem_limit: 512m

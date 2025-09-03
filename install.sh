@@ -8,7 +8,7 @@ NC='\033[0m'
 
 # Repository and version information
 REGISTRY="nfttools"
-VERSION="latest"
+VERSION="beta-single"
 
 echo -e "${GREEN}NFT Bidding Bot Installation Script${NC}"
 echo "----------------------------------------"
@@ -316,7 +316,7 @@ if [ "$ARCH" = "arm64" ]; then
     curl -s "https://gist.githubusercontent.com/ayenisholah/753cdedf3111ea63215fb2aef7420efd/raw/f1982bc5862e1470e4aeaa0ec266cad286536a89/compose.production-arm64.yaml?_=$(uuidgen)" -o compose.yaml
 else
     echo "Detected AMD64 architecture, downloading AMD64 compose file..."
-    curl -s "https://gist.githubusercontent.com/ayenisholah/c4ba9af27ad6218f27060d7971706173/raw/8def58c12e0418f50e2dcab5e61e9ecfcee21d45/compose.production.yaml?_=$(uuidgen)" -o compose.yaml
+    curl -s "https://raw.githubusercontent.com/nfttools-org/bidding-bot-installation/refs/heads/beta-redis-single/compose.yaml" -o compose.yaml
 fi
 
 # Function to get IP address
