@@ -3,8 +3,6 @@ services:
     image: nfttools/bidding-bot-server-beta-single:beta-single
     platform: linux/amd64
     restart: always
-    mem_limit: 4608m
-    memswap_limit: 5120m
     ports:
       - "3003:3003"
     healthcheck:
@@ -41,8 +39,6 @@ services:
     image: nfttools/bidding-bot-client-beta-single:beta-single
     platform: linux/amd64
     restart: always
-    mem_limit: 512m
-    memswap_limit: 640m
     ports:
       - "3001:3001"
     extra_hosts:
@@ -72,9 +68,7 @@ services:
   mongodb:
     image: "mongo:latest"
     container_name: "mongodb_container"
-    mem_limit: 1536m
-    memswap_limit: 1792m
-    command: mongod --wiredTigerCacheSizeGB 1.0
+    command: mongod
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
