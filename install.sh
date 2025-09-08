@@ -285,20 +285,43 @@ if [ ! -z "$ALL_CONTAINERS" ]; then
     docker stop $ALL_CONTAINERS
 fi
 
-# Clear Redis volumes (preserve MongoDB data)
-echo -e "${YELLOW}Clearing Redis cache volumes...${NC}"
+# Clear all application volumes for fresh installation
+echo -e "${YELLOW}Removing all application volumes for fresh installation...${NC}"
 
-# Clear Redis volumes
-REDIS_VOLUMES=$(docker volume ls -q | grep "redis_data_")
-if [ ! -z "$REDIS_VOLUMES" ]; then
-    echo -e "${YELLOW}Removing Redis volumes: $REDIS_VOLUMES${NC}"
-    docker volume rm $REDIS_VOLUMES || {
-        echo -e "${RED}Failed to remove some Redis volumes. Forcing removal...${NC}"
-        for vol in $REDIS_VOLUMES; do
-            docker volume rm -f $vol || echo -e "${RED}Could not remove volume $vol${NC}"
-        done
-    }
+# Get all volumes related to the application
+APP_VOLUMES=$(docker volume ls -q | grep -E "(nft-bidding-bot_|redis_data|server_data|mongodb_data)")
+if [ ! -z "$APP_VOLUMES" ]; then
+    echo -e "${YELLOW}Found application volumes to remove:${NC}"
+    echo "$APP_VOLUMES"
+    
+    # Ask user if they want to preserve MongoDB data
+    read -p "Do you want to preserve MongoDB data? (y/N): " -n 1 -r
+    echo
+    
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Preserving MongoDB data...${NC}"
+        # Remove all volumes except MongoDB
+        VOLUMES_TO_REMOVE=$(echo "$APP_VOLUMES" | grep -v "mongodb")
+    else
+        echo -e "${YELLOW}Removing all data including MongoDB...${NC}"
+        VOLUMES_TO_REMOVE="$APP_VOLUMES"
+    fi
+    
+    if [ ! -z "$VOLUMES_TO_REMOVE" ]; then
+        echo -e "${YELLOW}Removing volumes:${NC}"
+        echo "$VOLUMES_TO_REMOVE"
+        echo "$VOLUMES_TO_REMOVE" | xargs docker volume rm -f || {
+            echo -e "${RED}Some volumes could not be removed. Attempting force removal...${NC}"
+            for vol in $VOLUMES_TO_REMOVE; do
+                docker volume rm -f $vol || echo -e "${RED}Could not remove volume $vol${NC}"
+            done
+        }
+    fi
 fi
+
+# Also remove any dangling volumes
+echo -e "${YELLOW}Removing dangling volumes...${NC}"
+docker volume prune -f
 
 
 # Create project directory
@@ -382,9 +405,19 @@ REDIS_PORT=6379
 EOL
 fi
 
-# Start services
+# Remove old images to force fresh pull
+echo -e "${YELLOW}Removing old Docker images...${NC}"
+docker images | grep "nfttools/bidding-bot" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
+
+# Start services with fresh pull
+echo -e "${YELLOW}Pulling fresh Docker images...${NC}"
+docker compose pull --ignore-pull-failures || {
+    echo -e "${RED}Failed to pull some images. Retrying...${NC}"
+    docker compose pull
+}
+
 echo -e "${YELLOW}Starting services...${NC}"
-docker compose pull && docker compose build && docker compose up -d
+docker compose up -d
 
 # Check health
 echo -e "${YELLOW}Checking service health...${NC}"
