@@ -285,27 +285,18 @@ if [ ! -z "$ALL_CONTAINERS" ]; then
     docker stop $ALL_CONTAINERS
 fi
 
-# Clear all application volumes for fresh installation
-echo -e "${YELLOW}Removing all application volumes for fresh installation...${NC}"
+# Clear Redis and server volumes for fresh installation (preserving MongoDB)
+echo -e "${YELLOW}Removing Redis and server volumes for fresh installation (MongoDB data will be preserved)...${NC}"
 
 # Get all volumes related to the application
 APP_VOLUMES=$(docker volume ls -q | grep -E "(nft-bidding-bot_|redis_data|server_data|mongodb_data)")
 if [ ! -z "$APP_VOLUMES" ]; then
-    echo -e "${YELLOW}Found application volumes to remove:${NC}"
+    echo -e "${YELLOW}Found application volumes:${NC}"
     echo "$APP_VOLUMES"
     
-    # Ask user if they want to preserve MongoDB data
-    read -p "Do you want to preserve MongoDB data? (y/N): " -n 1 -r
-    echo
-    
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}Preserving MongoDB data...${NC}"
-        # Remove all volumes except MongoDB
-        VOLUMES_TO_REMOVE=$(echo "$APP_VOLUMES" | grep -v "mongodb")
-    else
-        echo -e "${YELLOW}Removing all data including MongoDB...${NC}"
-        VOLUMES_TO_REMOVE="$APP_VOLUMES"
-    fi
+    echo -e "${YELLOW}Preserving MongoDB data...${NC}"
+    # Remove all volumes except MongoDB
+    VOLUMES_TO_REMOVE=$(echo "$APP_VOLUMES" | grep -v "mongodb")
     
     if [ ! -z "$VOLUMES_TO_REMOVE" ]; then
         echo -e "${YELLOW}Removing volumes:${NC}"
