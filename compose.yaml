@@ -14,6 +14,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      NODE_ENV: "production"
       PORT: 3003
       NODE_OPTIONS: "--max-old-space-size=4096"
       REDIS_HOST: "redis"
@@ -34,6 +35,7 @@ services:
       - redis
     volumes:
       - server_data:/app/data
+      - /dev/null:/app/.env:ro
 
   client:
     image: nfttools/bidding-bot-client-beta-single:beta-single
