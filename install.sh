@@ -368,6 +368,8 @@ if [ -f .env ]; then
     update_env_var "PORT_SERVER" "3003"
     update_env_var "PORT_CLIENT" "3001"
     update_env_var "SERVER_IP" "${SERVER_IP}"
+    update_env_var "REDIS_HOST" "redis"
+    update_env_var "REDIS_PORT" "6379"
 else
     echo -e "${YELLOW}Creating new .env file...${NC}"
     cat > .env << EOL
@@ -375,9 +377,8 @@ MONGODB_URI=mongodb://mongodb:27017/BIDDING_BOT
 PORT_SERVER=3003
 PORT_CLIENT=3001
 SERVER_IP=${SERVER_IP}
-REDIS_HOST=${REDIS_HOST}
-REDIS_PORT=${REDIS_PORT}
-NODE_OPTIONS=${NODE_OPTIONS}
+REDIS_HOST=redis
+REDIS_PORT=6379
 EOL
 fi
 
