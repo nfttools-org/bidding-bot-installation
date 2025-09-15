@@ -218,6 +218,30 @@ if [ "$OS" = "Linux" ]; then
         echo "vm.max_map_count = 262144" | sudo tee -a /etc/sysctl.conf
     fi
     
+    # Set up Docker log rotation to prevent unbounded log growth
+    echo -e "${YELLOW}Setting up Docker log rotation...${NC}"
+    sudo mkdir -p /etc/docker
+    if [ -f /etc/docker/daemon.json ]; then
+        echo "Backing up existing /etc/docker/daemon.json..."
+        sudo cp /etc/docker/daemon.json /etc/docker/daemon.json.bak.$(date +%s)
+    fi
+    sudo tee /etc/docker/daemon.json >/dev/null <<'EOF'
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "1g",
+    "max-file": "3"
+  }
+}
+EOF
+
+    # Restart Docker to apply log rotation settings (ignore errors on non-systemd setups)
+    if command -v systemctl >/dev/null 2>&1; then
+        sudo systemctl restart docker || true
+    else
+        sudo service docker restart || true
+    fi
+
     echo -e "${GREEN}System configuration optimized!${NC}"
     echo "Changes applied:"
     echo "- vm.overcommit_memory = 1 (prevents Redis memory issues)"
@@ -228,6 +252,15 @@ fi
 # System cleanup (especially useful for updates)
 if [ "$OS" = "Linux" ]; then
     echo -e "${YELLOW}Performing system cleanup...${NC}"
+    
+    # Truncate Docker container logs and common large system logs
+    echo "=== Truncating Docker container logs... ==="
+    sudo find /var/lib/docker/containers/ -name "*-json.log" -exec truncate -s 0 {} \; 2>/dev/null || true
+    
+    echo "=== Truncating big system logs... ==="
+    [ -f /var/log/nginx/access.log ] && sudo truncate -s 0 /var/log/nginx/access.log || true
+    [ -f /var/log/nginx/error.log ] && sudo truncate -s 0 /var/log/nginx/error.log || true
+    [ -f /var/log/btmp ] && sudo truncate -s 0 /var/log/btmp || true
     
     # Docker cleanup (preserve volumes to protect database data)
     echo "Cleaning Docker system..."
