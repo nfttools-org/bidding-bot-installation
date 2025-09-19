@@ -624,4 +624,71 @@ NGINX_CONF
             echo -e "${RED}Failed to update nginx configuration. Please check your nginx setup.${NC}"
         fi
     fi
+    
+    # Configure SSL certificates if not already done
+    SSL_MARKER="/etc/nfttools-nginx-ssl-configured"
+    
+    if [ -f "$SSL_MARKER" ]; then
+        echo -e "${GREEN}SSL certificates already configured.${NC}"
+    else
+        echo -e "\n${YELLOW}Setting up SSL certificates for HTTPS access...${NC}"
+        
+        # Extract email from .env file
+        if [ -f .env ] && grep -q "EMAIL=" .env; then
+            SSL_EMAIL=$(grep "EMAIL=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        else
+            echo -e "${YELLOW}No EMAIL found in .env file.${NC}"
+            read -p "Enter email for SSL certificate registration: " SSL_EMAIL
+            if [ -z "$SSL_EMAIL" ]; then
+                echo -e "${RED}Email is required for SSL setup. Skipping SSL configuration.${NC}"
+                return
+            fi
+        fi
+        
+        # Install certbot if not present
+        if ! command -v certbot &> /dev/null; then
+            echo -e "${YELLOW}Installing certbot...${NC}"
+            sudo apt update
+            sudo apt install -y certbot python3-certbot-nginx
+        fi
+        
+        # Extract USERNAME for domains
+        if [ -f .env ] && grep -q "USERNAME=" .env; then
+            SSL_USERNAME=$(grep "USERNAME=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        else
+            SSL_USERNAME="$NGINX_USERNAME"
+        fi
+        
+        echo -e "${YELLOW}Obtaining SSL certificates for domains:${NC}"
+        echo -e "  - ${SSL_USERNAME}.nfttools.io"
+        echo -e "  - ${SSL_USERNAME}-api.nfttools.io"
+        
+        # Obtain SSL certificates
+        if sudo certbot --nginx \
+            -d "${SSL_USERNAME}.nfttools.io" \
+            -d "${SSL_USERNAME}-api.nfttools.io" \
+            --non-interactive \
+            --agree-tos \
+            --email "$SSL_EMAIL" \
+            --redirect; then
+            
+            echo -e "${GREEN}✅ SSL certificates obtained successfully!${NC}"
+            
+            # Create marker file
+            sudo touch "$SSL_MARKER"
+            echo "📝 Created SSL marker file: $SSL_MARKER"
+            
+            # Reload nginx with new SSL configuration
+            sudo systemctl reload nginx
+            
+            echo -e "\n${GREEN}HTTPS is now enabled!${NC}"
+            echo -e "Your sites are accessible at:"
+            echo -e "  - https://${SSL_USERNAME}.nfttools.io"
+            echo -e "  - https://${SSL_USERNAME}-api.nfttools.io"
+            echo -e "\nHTTP requests will be automatically redirected to HTTPS."
+        else
+            echo -e "${RED}Failed to obtain SSL certificates.${NC}"
+            echo -e "${YELLOW}You can manually run: sudo certbot --nginx${NC}"
+        fi
+    fi
 fi
