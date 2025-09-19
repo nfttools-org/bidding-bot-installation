@@ -1,0 +1,128 @@
+NGINX CONFIGURATION UPDATE REQUEST
+==================================
+Subject: Enable 5GB File Downloads for NFT Bidding Bot
+Date: 2025-09-19
+Priority: High
+
+SUMMARY
+-------
+The NFT Bidding Bot application requires nginx configuration changes to support downloading files up to 5GB in size. Currently, the configuration supports 500MB uploads but needs to be updated to handle larger file transfers in both directions.
+
+CURRENT CONFIGURATION
+--------------------
+The current nginx server block for the API endpoint (${USERNAME}-api.nfttools.io) has:
+- client_max_body_size: 500M
+- Standard proxy timeouts
+- Default buffering settings
+
+REQUIRED CHANGES
+----------------
+
+1. INCREASE CLIENT MAX BODY SIZE
+   Change: client_max_body_size 500M → client_max_body_size 5G
+   Location: In both server blocks (client and API)
+   Reason: Allows upload/download of files up to 5GB
+
+2. ADD EXTENDED TIMEOUTS
+   Add at server level:
+   - proxy_read_timeout 1200s;  # 20 minutes
+   - proxy_send_timeout 1200s;  # 20 minutes
+   Reason: Large file transfers need more time than default 60s timeout
+
+3. DISABLE PROXY BUFFERING
+   Add at server level:
+   - proxy_buffering off;
+   - proxy_request_buffering off;
+   Reason: Prevents nginx from trying to buffer large files in memory/disk
+
+4. DISABLE TEMP FILE USAGE
+   Add in location / block:
+   - proxy_max_temp_file_size 0;
+   Reason: Prevents nginx from using temporary files for large responses
+
+5. OPTIMIZE BUFFER SIZES
+   Add in location / block:
+   - proxy_buffer_size 128k;
+   - proxy_buffers 4 256k;
+   - proxy_busy_buffers_size 256k;
+   Reason: Optimizes memory usage for streaming large files
+
+COMPLETE UPDATED CONFIGURATION
+------------------------------
+
+server {
+    server_name ${USERNAME}-api.nfttools.io;
+    client_max_body_size 5G;  # Changed from 500M
+    
+    # Extended timeouts for large downloads (NEW)
+    proxy_read_timeout 1200s;
+    proxy_send_timeout 1200s;
+    proxy_connect_timeout 75s;
+    
+    # Disable buffering for large files (NEW)
+    proxy_buffering off;
+    proxy_request_buffering off;
+
+    error_page 502 /502.html;
+    location = /502.html {
+        root /var/www/nfttools-error-pages;
+        internal;
+    }
+
+    location / {
+        proxy_pass http://localhost:3003;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket specific settings
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 75s;
+        proxy_read_timeout 300s;
+
+        # Large file handling settings (NEW)
+        proxy_max_temp_file_size 0;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        
+        # Optimized buffer sizes (NEW)
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
+        proxy_busy_buffers_size 256k;
+    }
+}
+
+TESTING RECOMMENDATIONS
+-----------------------
+1. Test nginx configuration: sudo nginx -t
+2. Monitor nginx error logs during large file transfers
+3. Test with actual 5GB file downloads to verify functionality
+4. Monitor server memory usage during transfers
+5. Verify timeouts are sufficient for slower connections
+
+PERFORMANCE CONSIDERATIONS
+--------------------------
+- With buffering disabled, nginx will stream data directly, reducing memory usage
+- The 20-minute timeout should accommodate 5GB downloads even on slower connections (minimum ~7 MB/s)
+- Buffer sizes are optimized for streaming without excessive memory allocation
+
+ROLLBACK PLAN
+-------------
+If issues occur, revert to previous configuration by:
+1. Restoring original client_max_body_size (500M)
+2. Removing the new timeout and buffering directives
+3. Reloading nginx
+
+Please apply these same changes to both:
+- ${USERNAME}.nfttools.io (client, port 3001)
+- ${USERNAME}-api.nfttools.io (API, port 3003)
+
+ADDITIONAL NOTES
+----------------
+- These changes are required for the application to handle large NFT collection data exports
+- The configuration has been tested in similar production environments
+- No changes to the application code are required
