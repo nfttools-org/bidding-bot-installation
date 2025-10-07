@@ -1,6 +1,6 @@
 services:
   server:
-    image: nfttools/bidding-bot-server-beta-single:beta-single
+    image: nfttools/bidding-bot-server-multi-chain:multi-chain
     platform: linux/amd64
     restart: always
     ports:
@@ -38,7 +38,7 @@ services:
       - /dev/null:/app/.env:ro
 
   client:
-    image: nfttools/bidding-bot-client-beta-single:beta-single
+    image: nfttools/bidding-bot-client-multi-chain:multi-chain
     platform: linux/amd64
     restart: always
     ports:

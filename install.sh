@@ -8,7 +8,7 @@ NC='\033[0m'
 
 # Repository and version information
 REGISTRY="nfttools"
-VERSION="beta-single"
+VERSION="multi-chain"
 
 echo -e "${GREEN}NFT Bidding Bot Installation Script${NC}"
 echo "----------------------------------------"
