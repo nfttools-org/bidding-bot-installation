@@ -363,7 +363,7 @@ if [ "$ARCH" = "arm64" ]; then
     curl -s "https://gist.githubusercontent.com/ayenisholah/753cdedf3111ea63215fb2aef7420efd/raw/f1982bc5862e1470e4aeaa0ec266cad286536a89/compose.production-arm64.yaml?_=$(uuidgen)" -o compose.yaml
 else
     echo "Detected AMD64 architecture, downloading AMD64 compose file..."
-    curl -s "https://raw.githubusercontent.com/nfttools-org/bidding-bot-installation/refs/heads/beta-redis-single/compose.yaml" -o compose.yaml
+    curl -s "https://raw.githubusercontent.com/nfttools-org/bidding-bot-installation/refs/heads/multi-chain/compose.yaml?_=$(uuidgen)" -o compose.yaml
 fi
 
 # Function to get IP address
