@@ -417,6 +417,8 @@ if [ -f .env ]; then
     update_env_var "SERVER_IP" "${SERVER_IP}"
     update_env_var "REDIS_HOST" "redis"
     update_env_var "REDIS_PORT" "6379"
+    update_env_var "MONGO_MAX_POOL_SIZE" "100"
+    update_env_var "MONGO_MIN_POOL_SIZE" "30"
 else
     echo -e "${YELLOW}Creating new .env file...${NC}"
     cat > .env << EOL
@@ -426,6 +428,8 @@ PORT_CLIENT=3001
 SERVER_IP=${SERVER_IP}
 REDIS_HOST=redis
 REDIS_PORT=6379
+MONGO_MAX_POOL_SIZE=100
+MONGO_MIN_POOL_SIZE=30
 EOL
 fi
 
