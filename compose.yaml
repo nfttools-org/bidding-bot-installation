@@ -55,6 +55,7 @@ services:
     environment:
       PORT: 3001
       BODY_SIZE_LIMIT: 104857600
+      ALCHEMY_API_KEY: "Vt4-KnmnLA7XAlfDkeWij"
       NEXT_PUBLIC_ALCHEMY_API_KEY: "Vt4-KnmnLA7XAlfDkeWij"
       NEXT_PUBLIC_API_KEY: ${API_KEY}
       NEXT_PUBLIC_AXIOM_DATASET: "nft-bidding-bot"
