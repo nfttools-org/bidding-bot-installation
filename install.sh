@@ -59,6 +59,15 @@ if [ "$OS" = "Linux" ]; then
     sudo chmod 666 /var/run/docker.sock
 fi
 
+# Open port 8888 for debug log downloads (if UFW is active)
+if [ "$OS" = "Linux" ] && command -v ufw >/dev/null 2>&1; then
+    if sudo ufw status | grep -q "Status: active"; then
+        echo -e "${YELLOW}Opening port 8888 for debug log downloads...${NC}"
+        sudo ufw allow 8888/tcp >/dev/null 2>&1
+        echo -e "${GREEN}Port 8888 opened for HTTP downloads${NC}"
+    fi
+fi
+
 # Check Docker Compose installation
 if ! [ -x "$(command -v docker-compose)" ]; then
     echo -e "${YELLOW}Docker Compose not found.${NC}"
