@@ -479,6 +479,10 @@ docker compose up -d
 echo -e "${YELLOW}Checking service health...${NC}"
 sleep 10
 
+# Fix debug-logs volume permissions (server runs as non-root user)
+echo -e "${YELLOW}Fixing debug-logs volume permissions...${NC}"
+docker exec nft-bidding-bot-server-1 sh -c 'chmod 777 /app/debug-logs' 2>/dev/null || true
+
 # Run debug script and save output to txt file
 echo -e "${YELLOW}Running container diagnostics...${NC}"
 ./debug-container.sh all > debug-output.txt 2>&1
