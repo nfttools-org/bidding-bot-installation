@@ -23,7 +23,7 @@
 #   crash       - Analyze recent crash/restart
 #   all         - Run all diagnostics
 #   watch       - Live monitoring mode
-#   export      - Export all debug info to a file
+#   export      - Export all debug info to file (with optional HTTP serve)
 #   snapshot    - Take immediate diagnostic snapshot
 #   monitor     - Start periodic snapshot daemon (hourly)
 #   crashes     - Watch for crashes and auto-capture snapshots
@@ -462,6 +462,7 @@ show_all() {
     show_lifecycle
     show_logs 50
     show_inspect
+    analyze_crash
 }
 
 # =============================================================================
@@ -485,11 +486,14 @@ watch_containers() {
 }
 
 # =============================================================================
-# EXPORT - Export all debug info to file
+# EXPORT - Export all debug info to file (with optional HTTP download)
 # =============================================================================
 export_debug() {
     local timestamp=$(date '+%Y%m%d_%H%M%S')
     local output_file="debug_export_${timestamp}.txt"
+    local serve_http=${1:-false}
+    local port=${2:-8888}
+    local timeout_sec=${3:-300}
 
     print_header "EXPORTING DEBUG INFO"
     echo "Writing to: $output_file"
@@ -500,9 +504,44 @@ export_debug() {
         show_all
     } > "$output_file" 2>&1
 
-    echo -e "${GREEN}✓ Debug info exported to: $output_file${NC}"
-    echo ""
-    echo "You can share this file for troubleshooting."
+    local file_size=$(du -h "$output_file" | cut -f1)
+    echo -e "${GREEN}✓ Debug info exported to: $output_file ($file_size)${NC}"
+
+    if [ "$serve_http" = "true" ] || [ "$serve_http" = "serve" ]; then
+        # Get server IP
+        local server_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+        if [ -z "$server_ip" ]; then
+            server_ip=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || echo "YOUR_VPS_IP")
+        fi
+
+        echo ""
+        echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+        echo -e "${CYAN}  Download URL: http://${server_ip}:${port}/${output_file}${NC}"
+        echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo "From your local machine, run:"
+        echo -e "  ${YELLOW}curl -O http://${server_ip}:${port}/${output_file}${NC}"
+        echo "  or open the URL in your browser"
+        echo ""
+        echo "Server will auto-stop after ${timeout_sec} seconds or press Ctrl+C"
+        echo ""
+
+        # Use Python's built-in HTTP server
+        if command -v python3 &> /dev/null; then
+            timeout "$timeout_sec" python3 -m http.server "$port" --bind 0.0.0.0 2>/dev/null || true
+        elif command -v python &> /dev/null; then
+            timeout "$timeout_sec" python -m SimpleHTTPServer "$port" 2>/dev/null || true
+        else
+            echo -e "${RED}Python not found. Manual download required:${NC}"
+            echo "  scp root@${server_ip}:$(pwd)/${output_file} ./"
+        fi
+    else
+        echo ""
+        echo "You can share this file for troubleshooting."
+        echo ""
+        echo "To download via HTTP, run:"
+        echo -e "  ${YELLOW}./debug-container.sh export serve${NC}"
+    fi
 }
 
 # =============================================================================
@@ -910,7 +949,7 @@ main() {
             watch_containers
             ;;
         export)
-            export_debug
+            export_debug "${2:-false}" "${3:-8888}" "${4:-300}"
             ;;
         crash)
             analyze_crash
@@ -955,7 +994,7 @@ main() {
             echo "  crash        - Analyze recent crash/restart"
             echo "  all          - Run all diagnostics"
             echo "  watch        - Live monitoring mode"
-            echo "  export       - Export all debug info to file"
+            echo "  export [serve] [port] - Export all debug info (optionally serve via HTTP)"
             echo ""
             echo "Automated Monitoring:"
             echo "  snapshot [trigger]  - Take immediate diagnostic snapshot"
