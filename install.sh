@@ -318,18 +318,18 @@ if [ ! -z "$ALL_CONTAINERS" ]; then
     docker stop $ALL_CONTAINERS
 fi
 
-# Clear Redis and server volumes for fresh installation (preserving MongoDB)
-echo -e "${YELLOW}Removing Redis and server volumes for fresh installation (MongoDB data will be preserved)...${NC}"
+# Clear Redis and log volumes for fresh installation (preserving MongoDB and server_data for auto-recovery)
+echo -e "${YELLOW}Removing Redis and log volumes for fresh installation (MongoDB and server_data will be preserved)...${NC}"
 
 # Get all volumes related to the application
-APP_VOLUMES=$(docker volume ls -q | grep -E "(nft-bidding-bot_|redis_data|server_data|mongodb_data)")
+APP_VOLUMES=$(docker volume ls -q | grep -E "(nft-bidding-bot_|redis_data|server_data|server_logs|mongodb_data)")
 if [ ! -z "$APP_VOLUMES" ]; then
     echo -e "${YELLOW}Found application volumes:${NC}"
     echo "$APP_VOLUMES"
-    
-    echo -e "${YELLOW}Preserving MongoDB data...${NC}"
-    # Remove all volumes except MongoDB
-    VOLUMES_TO_REMOVE=$(echo "$APP_VOLUMES" | grep -v "mongodb")
+
+    echo -e "${YELLOW}Preserving MongoDB and server_data (encrypted password for auto-recovery)...${NC}"
+    # Remove all volumes except MongoDB and server_data
+    VOLUMES_TO_REMOVE=$(echo "$APP_VOLUMES" | grep -v -E "(mongodb|server_data)")
     
     if [ ! -z "$VOLUMES_TO_REMOVE" ]; then
         echo -e "${YELLOW}Removing volumes:${NC}"
@@ -365,6 +365,11 @@ else
     echo "Detected AMD64 architecture, downloading AMD64 compose file..."
     curl -s "https://raw.githubusercontent.com/nfttools-org/bidding-bot-installation/refs/heads/beta-redis-single/compose.yaml" -o compose.yaml
 fi
+
+# Download debug script to project root
+echo -e "${YELLOW}Downloading debug script...${NC}"
+curl -s "https://raw.githubusercontent.com/nfttools-org/bidding-bot-installation/refs/heads/beta-redis-single/debug-container.sh" -o debug-container.sh
+chmod +x debug-container.sh
 
 # Function to get IP address
 get_ip_address() {
@@ -435,6 +440,18 @@ DEBUG=true
 EOL
 fi
 
+# Generate unique encryption key for password file encryption (auto-recovery security)
+if [ -f .env ]; then
+    if ! grep -q "^ENCRYPTION_KEY=" .env; then
+        echo -e "${YELLOW}Generating unique encryption key for password protection...${NC}"
+        ENCRYPTION_KEY=$(openssl rand -hex 32)
+        echo "ENCRYPTION_KEY=${ENCRYPTION_KEY}" >> .env
+        echo -e "${GREEN}Encryption key generated and saved to .env${NC}"
+    fi
+    # Ensure .env has restrictive permissions (owner read/write only)
+    chmod 600 .env
+fi
+
 # Remove old images to force fresh pull
 echo -e "${YELLOW}Removing old Docker images...${NC}"
 docker images | grep "nfttools/bidding-bot" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
@@ -452,6 +469,62 @@ docker compose up -d
 # Check health
 echo -e "${YELLOW}Checking service health...${NC}"
 sleep 10
+
+# Run debug script and save output to txt file
+echo -e "${YELLOW}Running container diagnostics...${NC}"
+./debug-container.sh all > debug-output.txt 2>&1
+echo -e "${GREEN}Debug output saved to debug-output.txt${NC}"
+
+# Setup debug monitoring systemd services (only on Linux with systemd)
+if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
+    echo -e "${YELLOW}Setting up debug monitoring services...${NC}"
+
+    # Create debug-monitor service (hourly snapshots)
+    sudo tee /etc/systemd/system/debug-monitor.service >/dev/null <<EOF
+[Unit]
+Description=NFT Bidding Bot Debug Monitor (Hourly Snapshots)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=$(pwd)
+ExecStart=$(pwd)/debug-container.sh monitor 3600
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Create debug-crashwatch service
+    sudo tee /etc/systemd/system/debug-crashwatch.service >/dev/null <<EOF
+[Unit]
+Description=NFT Bidding Bot Crash Watcher
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=$(pwd)
+ExecStart=$(pwd)/debug-container.sh crashes
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Enable and start services
+    sudo systemctl daemon-reload
+    sudo systemctl enable debug-monitor debug-crashwatch
+    sudo systemctl start debug-monitor debug-crashwatch
+
+    echo -e "${GREEN}Debug monitoring services started!${NC}"
+    echo "  - Hourly snapshots: systemctl status debug-monitor"
+    echo "  - Crash watcher: systemctl status debug-crashwatch"
+    echo "  - Snapshots saved to: ./debug-snapshots/"
+fi
 
 if curl -sk http://localhost:3003/health > /dev/null; then
     echo -e "${GREEN}Server is healthy!${NC}"
