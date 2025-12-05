@@ -38,12 +38,16 @@ services:
       - redis
     volumes:
       - server_data:/app/data
+      - server_logs:/app/debug-logs
       - /dev/null:/app/.env:ro
     logging:
       driver: "json-file"
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "50m"
+        max-file: "5"
+    labels:
+      - "service=bidding-bot-server"
+      - "environment=production"
 
   client:
     image: nfttools/bidding-bot-client-beta-single:beta-single
@@ -125,3 +129,4 @@ volumes:
   mongodb_data:
   redis_data:
   server_data:
+  server_logs:
