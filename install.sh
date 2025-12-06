@@ -539,6 +539,42 @@ EOF
     echo "  - Snapshots saved to: ./debug-snapshots/"
 fi
 
+# Ensure update server is running and healthy (only on Linux with systemd)
+if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
+    echo -e "${YELLOW}Checking update server status...${NC}"
+
+    # Check if update-server service exists
+    if systemctl list-unit-files | grep -q "update-server.service"; then
+        # Service exists - check if it's running
+        if systemctl is-active --quiet update-server; then
+            echo -e "${GREEN}Update server is running${NC}"
+        else
+            echo -e "${YELLOW}Update server is not running. Starting...${NC}"
+            sudo systemctl start update-server
+            sleep 2
+        fi
+
+        # Verify health endpoint
+        echo -e "${YELLOW}Testing update server health...${NC}"
+        if curl -sf http://127.0.0.1:9999/health > /dev/null 2>&1; then
+            echo -e "${GREEN}Update server health check passed!${NC}"
+        else
+            echo -e "${RED}Update server health check failed. Restarting service...${NC}"
+            sudo systemctl restart update-server
+            sleep 3
+
+            # Final health check
+            if curl -sf http://127.0.0.1:9999/health > /dev/null 2>&1; then
+                echo -e "${GREEN}Update server recovered and healthy!${NC}"
+            else
+                echo -e "${RED}Update server still not responding. Check logs with: journalctl -u update-server${NC}"
+            fi
+        fi
+    else
+        echo -e "${YELLOW}Update server service not installed (will be set up by deployer)${NC}"
+    fi
+fi
+
 if curl -sk http://localhost:3003/health > /dev/null; then
     echo -e "${GREEN}Server is healthy!${NC}"
 else
