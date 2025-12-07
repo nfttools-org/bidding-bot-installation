@@ -327,8 +327,8 @@ if [ ! -z "$ALL_CONTAINERS" ]; then
     docker stop $ALL_CONTAINERS
 fi
 
-# Clear Redis and log volumes for fresh installation (preserving MongoDB and server_data for auto-recovery)
-echo -e "${YELLOW}Removing Redis and log volumes for fresh installation (MongoDB and server_data will be preserved)...${NC}"
+# Clear Redis and log volumes for fresh installation (preserving MongoDB)
+echo -e "${YELLOW}Removing Redis and log volumes for fresh installation (MongoDB will be preserved)...${NC}"
 
 # Get all volumes related to the application
 APP_VOLUMES=$(docker volume ls -q | grep -E "(nft-bidding-bot_|redis_data|server_data|server_logs|mongodb_data)")
@@ -336,9 +336,9 @@ if [ ! -z "$APP_VOLUMES" ]; then
     echo -e "${YELLOW}Found application volumes:${NC}"
     echo "$APP_VOLUMES"
 
-    echo -e "${YELLOW}Preserving MongoDB and server_data (encrypted password for auto-recovery)...${NC}"
-    # Remove all volumes except MongoDB and server_data
-    VOLUMES_TO_REMOVE=$(echo "$APP_VOLUMES" | grep -v -E "(mongodb|server_data)")
+    echo -e "${YELLOW}Preserving MongoDB data...${NC}"
+    # Remove all volumes except MongoDB
+    VOLUMES_TO_REMOVE=$(echo "$APP_VOLUMES" | grep -v -E "(mongodb)")
     
     if [ ! -z "$VOLUMES_TO_REMOVE" ]; then
         echo -e "${YELLOW}Removing volumes:${NC}"
@@ -447,18 +447,6 @@ MONGO_MAX_POOL_SIZE=100
 MONGO_MIN_POOL_SIZE=30
 DEBUG=true
 EOL
-fi
-
-# Generate unique encryption key for password file encryption (auto-recovery security)
-if [ -f .env ]; then
-    if ! grep -q "^ENCRYPTION_KEY=" .env; then
-        echo -e "${YELLOW}Generating unique encryption key for password protection...${NC}"
-        ENCRYPTION_KEY=$(openssl rand -hex 32)
-        echo "ENCRYPTION_KEY=${ENCRYPTION_KEY}" >> .env
-        echo -e "${GREEN}Encryption key generated and saved to .env${NC}"
-    fi
-    # Ensure .env has restrictive permissions (owner read/write only)
-    chmod 600 .env
 fi
 
 # Remove old images to force fresh pull

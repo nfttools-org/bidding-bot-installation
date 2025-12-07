@@ -275,7 +275,7 @@ show_redis() {
     docker exec redis redis-cli KEYS "*:lock" 2>/dev/null | wc -l | xargs echo "Active job locks:"
 
     print_subheader "Queue Sizes"
-    for queue in "main-queue" "blur-queue"; do
+    for queue in "BIDDING_BOT" "BLUR_BIDDING_QUEUE"; do
         waiting=$(docker exec redis redis-cli LLEN "bull:${queue}:wait" 2>/dev/null || echo "0")
         active=$(docker exec redis redis-cli LLEN "bull:${queue}:active" 2>/dev/null || echo "0")
         delayed=$(docker exec redis redis-cli ZCARD "bull:${queue}:delayed" 2>/dev/null || echo "0")
@@ -402,30 +402,30 @@ show_queue() {
     curl -s --max-time 5 http://localhost:3003/health 2>/dev/null | jq '.metrics.queue' 2>/dev/null || echo "Could not get queue counts"
 
     print_subheader "Stalled Jobs"
-    stalled_main=$(docker exec redis redis-cli SCARD "bull:main-queue:stalled" 2>/dev/null || echo "0")
-    stalled_blur=$(docker exec redis redis-cli SCARD "bull:blur-queue:stalled" 2>/dev/null || echo "0")
-    echo "main-queue stalled: $stalled_main"
-    echo "blur-queue stalled: $stalled_blur"
+    stalled_main=$(docker exec redis redis-cli SCARD "bull:BIDDING_BOT:stalled" 2>/dev/null || echo "0")
+    stalled_blur=$(docker exec redis redis-cli SCARD "bull:BLUR_BIDDING_QUEUE:stalled" 2>/dev/null || echo "0")
+    echo "BIDDING_BOT stalled: $stalled_main"
+    echo "BLUR_BIDDING_QUEUE stalled: $stalled_blur"
     if [ "$stalled_main" != "0" ] || [ "$stalled_blur" != "0" ]; then
         echo -e "${RED}⚠️  Stalled jobs detected! Workers may be hanging.${NC}"
     fi
 
     print_subheader "Failed Jobs Count"
-    failed_main=$(docker exec redis redis-cli ZCARD "bull:main-queue:failed" 2>/dev/null || echo "0")
-    failed_blur=$(docker exec redis redis-cli ZCARD "bull:blur-queue:failed" 2>/dev/null || echo "0")
-    echo "main-queue failed: $failed_main"
-    echo "blur-queue failed: $failed_blur"
+    failed_main=$(docker exec redis redis-cli ZCARD "bull:BIDDING_BOT:failed" 2>/dev/null || echo "0")
+    failed_blur=$(docker exec redis redis-cli ZCARD "bull:BLUR_BIDDING_QUEUE:failed" 2>/dev/null || echo "0")
+    echo "BIDDING_BOT failed: $failed_main"
+    echo "BLUR_BIDDING_QUEUE failed: $failed_blur"
 
     print_subheader "Active Jobs (may be stuck if running too long)"
-    active_jobs=$(docker exec redis redis-cli LRANGE "bull:main-queue:active" 0 9 2>/dev/null)
+    active_jobs=$(docker exec redis redis-cli LRANGE "bull:BIDDING_BOT:active" 0 9 2>/dev/null)
     if [ -z "$active_jobs" ]; then
         echo "No active jobs"
     else
         echo "Checking first 10 active jobs..."
         echo "$active_jobs" | while read -r jobId; do
             if [ ! -z "$jobId" ]; then
-                started=$(docker exec redis redis-cli HGET "bull:main-queue:$jobId" "processedOn" 2>/dev/null)
-                name=$(docker exec redis redis-cli HGET "bull:main-queue:$jobId" "name" 2>/dev/null)
+                started=$(docker exec redis redis-cli HGET "bull:BIDDING_BOT:$jobId" "processedOn" 2>/dev/null)
+                name=$(docker exec redis redis-cli HGET "bull:BIDDING_BOT:$jobId" "name" 2>/dev/null)
                 if [ ! -z "$started" ] && [ "$started" != "" ]; then
                     now_ms=$(($(date +%s) * 1000))
                     age_sec=$(( (now_ms - started) / 1000 ))
