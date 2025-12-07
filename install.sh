@@ -6,6 +6,13 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+# Redirect all output to log file AND stdout for debugging
+LOG_FILE="/var/log/nfttools-install.log"
+if [ -w "/var/log" ] || [ -w "$LOG_FILE" ]; then
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    echo "========== Installation started at $(date) =========="
+fi
+
 # Repository and version information
 REGISTRY="nfttools"
 VERSION="multi-chain"
@@ -692,3 +699,318 @@ NGINX_CONF
         fi
     fi
 fi
+
+# Setup Update Server (Linux only)
+if [ "$OS" = "Linux" ]; then
+    echo -e "\n${YELLOW}Setting up Update Server on port 9999...${NC}"
+
+    # Check for Node.js
+    if ! command -v node >/dev/null 2>&1; then
+        echo -e "${YELLOW}Installing Node.js...${NC}"
+        curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+        sudo apt install -y nodejs
+    fi
+
+    # Create update server with wrapper script approach (survives parent restart)
+    cat <<'UPDATE_SERVER' > /root/server.js
+const http = require('http');
+const { spawn } = require('child_process');
+const fs = require('fs');
+
+const PORT = 9999;
+const LOG_FILE = '/var/log/nfttools-update.log';
+const STATUS_FILE = '/tmp/update-status.json';
+const LOCK_FILE = '/tmp/update-in-progress.lock';
+
+// Logging function
+function log(message, level = 'INFO') {
+  const timestamp = new Date().toISOString();
+  const logLine = `[${timestamp}] [${level}] ${message}\n`;
+  try {
+    fs.appendFileSync(LOG_FILE, logLine);
+  } catch (e) {}
+  console.log(logLine.trim());
+}
+
+// Update status tracking
+function updateStatus(status) {
+  try {
+    fs.writeFileSync(STATUS_FILE, JSON.stringify({
+      ...status,
+      timestamp: new Date().toISOString()
+    }, null, 2));
+  } catch (e) {
+    log(`Failed to write status: ${e.message}`, 'ERROR');
+  }
+}
+
+// Crash protection
+process.on('uncaughtException', (error) => {
+  log(`Uncaught Exception: ${error.message}`, 'ERROR');
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  log(`Unhandled Rejection: ${reason}`, 'ERROR');
+  process.exit(1);
+});
+
+log('Update server starting...');
+
+const server = http.createServer((req, res) => {
+  const clientIP = (req.connection.remoteAddress || req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+
+  // IP validation - localhost and Docker networks only
+  const isAllowed = clientIP === '127.0.0.1' || clientIP === '::1' ||
+                   /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(clientIP);
+
+  if (!isAllowed) {
+    log(`Rejected connection from ${clientIP}`, 'WARN');
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: false, message: 'Access denied' }));
+    return;
+  }
+
+  // CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
+
+  // GET /health - Health check
+  if (req.method === 'GET' && req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: true,
+      status: 'healthy',
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString()
+    }));
+    return;
+  }
+
+  // GET /logs - Return last 200 lines of log
+  if (req.method === 'GET' && req.url === '/logs') {
+    try {
+      const logs = fs.existsSync(LOG_FILE)
+        ? fs.readFileSync(LOG_FILE, 'utf8').split('\n').slice(-200).join('\n')
+        : 'No logs yet';
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end(logs);
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('Error reading logs: ' + e.message);
+    }
+    return;
+  }
+
+  // GET /status - Return last update status
+  if (req.method === 'GET' && req.url === '/status') {
+    try {
+      const status = fs.existsSync(STATUS_FILE)
+        ? JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'))
+        : { status: 'no updates yet' };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(status));
+    } catch (e) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'unknown', error: e.message }));
+    }
+    return;
+  }
+
+  // GET /update - Check server status
+  if (req.method === 'GET' && req.url === '/update') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, message: 'Update server is running' }));
+    return;
+  }
+
+  // POST /update - Trigger update using wrapper script (survives server restart)
+  if (req.method === 'POST' && req.url === '/update') {
+    let body = '';
+    req.on('data', chunk => body += chunk.toString());
+    req.on('end', () => {
+      try {
+        const { scriptUrl } = JSON.parse(body);
+
+        // Validate URL
+        if (!scriptUrl) {
+          log('Missing scriptUrl in request', 'ERROR');
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, message: 'scriptUrl is required' }));
+          return;
+        }
+
+        const urlPattern = /^https?:\/\/[^\s<>{}\\|\\^~\[\]`]+$/;
+        if (!urlPattern.test(scriptUrl)) {
+          log(`Invalid scriptUrl format: ${scriptUrl}`, 'ERROR');
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, message: 'Invalid URL format' }));
+          return;
+        }
+
+        // Check lock file to prevent concurrent updates
+        if (fs.existsSync(LOCK_FILE)) {
+          try {
+            const lockAge = Date.now() - fs.statSync(LOCK_FILE).mtimeMs;
+            if (lockAge < 600000) { // 10 minutes
+              log(`Update rejected - another update in progress (lock age: ${Math.round(lockAge/1000)}s)`, 'WARN');
+              res.writeHead(409, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: false, message: 'Update already in progress' }));
+              return;
+            }
+            log(`Stale lock file found (${Math.round(lockAge/1000)}s old), removing...`, 'WARN');
+          } catch (e) {}
+        }
+
+        log(`=== UPDATE STARTED ===`);
+        log(`Script URL: ${scriptUrl}`);
+        log(`Client IP: ${clientIP}`);
+
+        // Create lock file
+        fs.writeFileSync(LOCK_FILE, Date.now().toString());
+
+        // Create wrapper script that handles its own logging (survives parent death)
+        const wrapperScript = `/tmp/update-wrapper-${Date.now()}.sh`;
+        const wrapperContent = `#!/bin/bash
+# Auto-generated update wrapper script
+SCRIPT_URL="${scriptUrl}"
+LOG_FILE="/var/log/nfttools-update.log"
+STATUS_FILE="/tmp/update-status.json"
+LOCK_FILE="/tmp/update-in-progress.lock"
+
+log_msg() {
+  echo "[\$(date -Iseconds)] [INFO] \$1" >> "\$LOG_FILE"
+}
+
+log_msg "=== WRAPPER SCRIPT STARTED ==="
+log_msg "Script URL: \$SCRIPT_URL"
+echo '{"status":"running","scriptUrl":"'\$SCRIPT_URL'","startedAt":"'\$(date -Iseconds)'","wrapper":true}' > "\$STATUS_FILE"
+
+# Execute the install script with full logging
+log_msg "Downloading and executing install script..."
+curl -sL "\$SCRIPT_URL" 2>&1 | while IFS= read -r line; do
+  echo "[\$(date -Iseconds)] [INFO] [OUTPUT] \$line" >> "\$LOG_FILE"
+done
+
+PIPE_STATUS=\${PIPESTATUS[0]}
+log_msg "=== WRAPPER SCRIPT COMPLETED === curl exit code: \$PIPE_STATUS"
+
+if [ \$PIPE_STATUS -eq 0 ]; then
+  echo '{"status":"success","exitCode":'\$PIPE_STATUS',"completedAt":"'\$(date -Iseconds)'","wrapper":true}' > "\$STATUS_FILE"
+else
+  echo '{"status":"failed","exitCode":'\$PIPE_STATUS',"completedAt":"'\$(date -Iseconds)'","wrapper":true}' > "\$STATUS_FILE"
+fi
+
+# Cleanup
+rm -f "\$LOCK_FILE"
+rm -f "${wrapperScript}"
+`;
+
+        fs.writeFileSync(wrapperScript, wrapperContent);
+        fs.chmodSync(wrapperScript, '755');
+
+        updateStatus({ status: 'running', scriptUrl, startedAt: new Date().toISOString(), wrapper: true });
+
+        // Respond immediately that update started
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, message: 'Update started', status: 'running' }));
+
+        // Execute wrapper script completely detached with nohup
+        // This survives even if this Node.js process is restarted
+        log(`Launching wrapper script: ${wrapperScript}`);
+        const child = spawn('nohup', [wrapperScript], {
+          detached: true,
+          stdio: 'ignore',
+          env: { ...process.env, HOME: '/root' }
+        });
+        child.unref();
+
+        log('Wrapper script launched successfully');
+
+      } catch (e) {
+        log(`Parse error: ${e.message}`, 'ERROR');
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, message: 'Invalid JSON' }));
+      }
+    });
+    return;
+  }
+
+  // 404 for unknown routes
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ success: false, message: 'Not found' }));
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+  log(`Update server running on port ${PORT}`);
+  log(`PID: ${process.pid}`);
+  log(`Node version: ${process.version}`);
+});
+
+server.on('error', (e) => {
+  log(`Server error: ${e.message}`, 'ERROR');
+  process.exit(1);
+});
+UPDATE_SERVER
+
+    # Create systemd service
+    cat <<'SERVICE' > /etc/systemd/system/update-server.service
+[Unit]
+Description=NFTTools Update Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root
+ExecStart=/usr/bin/node /root/server.js
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=update-server
+Environment="NODE_ENV=production"
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+    # Configure UFW for port 9999 (localhost and Docker only)
+    if command -v ufw >/dev/null 2>&1; then
+        echo -e "${YELLOW}Configuring firewall for update server...${NC}"
+        # Remove existing rules for port 9999 first
+        sudo ufw status numbered 2>/dev/null | grep 9999 | awk -F'[][]' '{print $2}' | sort -rn | while read -r num; do
+            [ -n "$num" ] && sudo ufw --force delete "$num" 2>/dev/null
+        done
+        # Add new rules
+        sudo ufw allow from 127.0.0.1 to any port 9999 comment 'Update server - localhost' 2>/dev/null || true
+        sudo ufw allow from 172.16.0.0/12 to any port 9999 comment 'Update server - Docker' 2>/dev/null || true
+    fi
+
+    # Enable and start service
+    systemctl daemon-reload
+    systemctl enable update-server
+    systemctl restart update-server
+
+    if systemctl is-active --quiet update-server; then
+        echo -e "${GREEN}Update server is running on port 9999${NC}"
+        echo -e "Endpoints:"
+        echo -e "  GET  /health - Health check"
+        echo -e "  GET  /logs   - View recent update logs"
+        echo -e "  GET  /status - Last update status"
+        echo -e "  POST /update - Trigger update"
+        echo -e "Logs: /var/log/nfttools-update.log"
+    else
+        echo -e "${RED}Failed to start update server${NC}"
+        systemctl status update-server --no-pager
+    fi
+fi
+
+# Final completion marker
+echo "========== Installation completed at $(date) =========="
+echo "{\"success\": true, \"timestamp\": \"$(date -Iseconds)\"}" > /tmp/install-status.json
