@@ -1005,14 +1005,30 @@ log_msg "=== WRAPPER SCRIPT STARTED ==="
 log_msg "Script URL: \$SCRIPT_URL"
 echo '{"status":"running","scriptUrl":"'\$SCRIPT_URL'","startedAt":"'\$(date -Iseconds)'","wrapper":true}' > "\$STATUS_FILE"
 
-# Execute the install script with full logging
-log_msg "Downloading and executing install script..."
-curl -sL "\$SCRIPT_URL" 2>&1 | while IFS= read -r line; do
+# Download script to temp file first
+TEMP_SCRIPT="/tmp/nfttools-install-\$\$.sh"
+log_msg "Downloading script to \$TEMP_SCRIPT..."
+curl -sL "\$SCRIPT_URL" -o "\$TEMP_SCRIPT"
+CURL_STATUS=\$?
+
+if [ \$CURL_STATUS -ne 0 ]; then
+  log_msg "ERROR: Failed to download script (curl exit code: \$CURL_STATUS)"
+  echo '{"status":"failed","error":"download_failed","exitCode":'\$CURL_STATUS',"completedAt":"'\$(date -Iseconds)'"}' > "\$STATUS_FILE"
+  rm -f "\$LOCK_FILE" "\$TEMP_SCRIPT"
+  exit 1
+fi
+
+log_msg "Downloaded script successfully (\$(wc -c < \$TEMP_SCRIPT) bytes). Executing..."
+chmod +x "\$TEMP_SCRIPT"
+
+# Execute script and capture output with timestamps
+bash "\$TEMP_SCRIPT" 2>&1 | while IFS= read -r line; do
   echo "[\$(date -Iseconds)] [INFO] [OUTPUT] \$line" >> "\$LOG_FILE"
 done
 
 PIPE_STATUS=\${PIPESTATUS[0]}
-log_msg "=== WRAPPER SCRIPT COMPLETED === curl exit code: \$PIPE_STATUS"
+rm -f "\$TEMP_SCRIPT"
+log_msg "=== WRAPPER SCRIPT COMPLETED === bash exit code: \$PIPE_STATUS"
 
 if [ \$PIPE_STATUS -eq 0 ]; then
   echo '{"status":"success","exitCode":'\$PIPE_STATUS',"completedAt":"'\$(date -Iseconds)'","wrapper":true}' > "\$STATUS_FILE"
