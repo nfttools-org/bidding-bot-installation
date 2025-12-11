@@ -454,6 +454,14 @@ docker compose up -d
 echo -e "${YELLOW}Checking service health...${NC}"
 sleep 10
 
+# Fix debug-logs volume permissions (server runs as non-root user)
+echo -e "${YELLOW}Fixing debug-logs volume permissions...${NC}"
+docker exec nft-bidding-bot-server-1 sh -c 'chmod -R 777 /app/debug-logs' 2>/dev/null || true
+
+# Clear debug-logs contents for fresh start (keep directory for volume mount)
+echo -e "${YELLOW}Clearing debug-logs for fresh start...${NC}"
+docker exec nft-bidding-bot-server-1 sh -c 'rm -rf /app/debug-logs/*' 2>/dev/null || true
+
 if curl -sk http://localhost:3003/health > /dev/null; then
     echo -e "${GREEN}Server is healthy!${NC}"
 else
