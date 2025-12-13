@@ -334,8 +334,8 @@ if [ ! -z "$ALL_CONTAINERS" ]; then
     docker stop $ALL_CONTAINERS
 fi
 
-# Clear Redis and log volumes for fresh installation (preserving MongoDB)
-echo -e "${YELLOW}Removing Redis and log volumes for fresh installation (MongoDB will be preserved)...${NC}"
+# Clear Redis volumes for fresh installation (preserving MongoDB and debug logs)
+echo -e "${YELLOW}Removing Redis volumes for fresh installation (MongoDB and debug logs will be preserved)...${NC}"
 
 # Get all volumes related to the application
 APP_VOLUMES=$(docker volume ls -q | grep -E "(nft-bidding-bot_|redis_data|server_data|server_logs|mongodb_data)")
@@ -343,9 +343,9 @@ if [ ! -z "$APP_VOLUMES" ]; then
     echo -e "${YELLOW}Found application volumes:${NC}"
     echo "$APP_VOLUMES"
 
-    echo -e "${YELLOW}Preserving MongoDB data...${NC}"
-    # Remove all volumes except MongoDB
-    VOLUMES_TO_REMOVE=$(echo "$APP_VOLUMES" | grep -v -E "(mongodb)")
+    echo -e "${YELLOW}Preserving MongoDB data and debug logs...${NC}"
+    # Remove all volumes except MongoDB and server_logs (debug logs)
+    VOLUMES_TO_REMOVE=$(echo "$APP_VOLUMES" | grep -v -E "(mongodb|server_logs)")
     
     if [ ! -z "$VOLUMES_TO_REMOVE" ]; then
         echo -e "${YELLOW}Removing volumes:${NC}"
@@ -478,9 +478,8 @@ sleep 10
 echo -e "${YELLOW}Fixing debug-logs volume permissions...${NC}"
 docker exec nft-bidding-bot-server-1 sh -c 'chmod -R 777 /app/debug-logs' 2>/dev/null || true
 
-# Clear debug-logs contents for fresh start (keep directory for volume mount)
-echo -e "${YELLOW}Clearing debug-logs for fresh start...${NC}"
-docker exec nft-bidding-bot-server-1 sh -c 'rm -rf /app/debug-logs/*' 2>/dev/null || true
+# NOTE: Debug logs are now preserved across reinstalls for troubleshooting
+# To manually clear logs: docker exec nft-bidding-bot-server-1 sh -c 'rm -rf /app/debug-logs/*'
 
 # Run debug script and save output to txt file
 echo -e "${YELLOW}Running container diagnostics...${NC}"
