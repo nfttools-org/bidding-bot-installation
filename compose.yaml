@@ -2,6 +2,7 @@ services:
   server:
     image: nfttools/bidding-bot-server-beta-single:beta-single
     platform: linux/amd64
+    user: "1000:1000"
     restart: always
     ports:
       - "3003:3003"

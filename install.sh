@@ -467,6 +467,33 @@ docker compose pull --ignore-pull-failures || {
     docker compose pull
 }
 
+# Fix debug-logs volume permissions BEFORE starting containers
+# This ensures the volume has correct permissions when the server first starts
+echo -e "${YELLOW}Setting up debug-logs volume with correct permissions...${NC}"
+
+VOLUME_NAME="nft-bidding-bot_server_logs"
+
+# Check if volume exists and is empty - if so, remove it to recreate with proper permissions
+if docker volume inspect "$VOLUME_NAME" >/dev/null 2>&1; then
+    FILE_COUNT=$(docker run --rm -v "$VOLUME_NAME":/data alpine sh -c 'find /data -type f 2>/dev/null | wc -l' 2>/dev/null || echo "0")
+    if [ "$FILE_COUNT" -eq "0" ] || [ -z "$FILE_COUNT" ]; then
+        echo "Empty or inaccessible volume detected, recreating with correct permissions..."
+        docker volume rm "$VOLUME_NAME" 2>/dev/null || true
+    fi
+fi
+
+# Create volume if it doesn't exist
+docker volume create "$VOLUME_NAME" 2>/dev/null || true
+
+# Always set permissions (handles both new and existing volumes)
+docker run --rm -v "$VOLUME_NAME":/data alpine sh -c '
+    chmod 777 /data
+    chown 1000:1000 /data
+    # Create a test file to verify write permissions
+    touch /data/.permission-test && rm /data/.permission-test
+' && echo -e "${GREEN}Debug-logs volume permissions verified${NC}" \
+  || echo -e "${RED}Warning: Could not set volume permissions${NC}"
+
 echo -e "${YELLOW}Starting services...${NC}"
 docker compose up -d
 
@@ -474,9 +501,9 @@ docker compose up -d
 echo -e "${YELLOW}Checking service health...${NC}"
 sleep 10
 
-# Fix debug-logs volume permissions (server runs as non-root user)
-echo -e "${YELLOW}Fixing debug-logs volume permissions...${NC}"
-docker exec nft-bidding-bot-server-1 sh -c 'chmod -R 777 /app/debug-logs' 2>/dev/null || true
+# Verify debug-logs permissions (backup check - run as root)
+echo -e "${YELLOW}Verifying debug-logs permissions...${NC}"
+docker exec -u root nft-bidding-bot-server-1 sh -c 'chmod 777 /app/debug-logs && chown 1000:1000 /app/debug-logs' 2>/dev/null || true
 
 # NOTE: Debug logs are now preserved across reinstalls for troubleshooting
 # To manually clear logs: docker exec nft-bidding-bot-server-1 sh -c 'rm -rf /app/debug-logs/*'
