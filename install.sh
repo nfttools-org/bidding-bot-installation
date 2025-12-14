@@ -505,8 +505,12 @@ sleep 10
 echo -e "${YELLOW}Verifying debug-logs permissions...${NC}"
 docker exec -u root nft-bidding-bot-server-1 sh -c 'chmod 777 /app/debug-logs && chown 1000:1000 /app/debug-logs' 2>/dev/null || true
 
-# NOTE: Debug logs are now preserved across reinstalls for troubleshooting
-# To manually clear logs: docker exec nft-bidding-bot-server-1 sh -c 'rm -rf /app/debug-logs/*'
+# Clear debug logs for fresh start after update
+echo -e "${YELLOW}Clearing debug logs for fresh start...${NC}"
+docker exec -u root nft-bidding-bot-server-1 sh -c 'rm -f /app/debug-logs/*.log' 2>/dev/null || {
+  echo -e "${YELLOW}Note: Could not clear debug logs (container may not be ready yet)${NC}"
+}
+echo -e "${GREEN}Debug logs cleared for fresh start${NC}"
 
 # Run debug script and save output to txt file
 echo -e "${YELLOW}Running container diagnostics...${NC}"
