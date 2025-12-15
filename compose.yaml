@@ -6,6 +6,8 @@ services:
     restart: always
     ports:
       - "3003:3003"
+    mem_limit: 6000m
+    memswap_limit: 7000m
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3003/health || exit 1"]
       interval: 30s
@@ -17,7 +19,7 @@ services:
     environment:
       NODE_ENV: "production"
       PORT: 3003
-      NODE_OPTIONS: "--max-old-space-size=4096"
+      NODE_OPTIONS: "--max-old-space-size=5500"
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       ALCHEMY_API_KEY: "Vt4-KnmnLA7XAlfDkeWij"
