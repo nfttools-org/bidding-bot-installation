@@ -66,6 +66,15 @@ if [ "$OS" = "Linux" ]; then
     sudo chmod 666 /var/run/docker.sock
 fi
 
+# Open port 8888 for debug log downloads (if UFW is active)
+if [ "$OS" = "Linux" ] && command -v ufw >/dev/null 2>&1; then
+    if sudo ufw status | grep -q "Status: active"; then
+        echo -e "${YELLOW}Opening port 8888 for debug log downloads...${NC}"
+        sudo ufw allow 8888/tcp >/dev/null 2>&1
+        echo -e "${GREEN}Port 8888 opened for HTTP downloads${NC}"
+    fi
+fi
+
 # Check Docker Compose installation
 if ! [ -x "$(command -v docker-compose)" ]; then
     echo -e "${YELLOW}Docker Compose not found.${NC}"
@@ -325,18 +334,18 @@ if [ ! -z "$ALL_CONTAINERS" ]; then
     docker stop $ALL_CONTAINERS
 fi
 
-# Clear Redis and server volumes for fresh installation (preserving MongoDB)
-echo -e "${YELLOW}Removing Redis and server volumes for fresh installation (MongoDB data will be preserved)...${NC}"
+# Clear Redis volumes for fresh installation (preserving MongoDB and debug logs)
+echo -e "${YELLOW}Removing Redis volumes for fresh installation (MongoDB and debug logs will be preserved)...${NC}"
 
 # Get all volumes related to the application
-APP_VOLUMES=$(docker volume ls -q | grep -E "(nft-bidding-bot_|redis_data|server_data|mongodb_data)")
+APP_VOLUMES=$(docker volume ls -q | grep -E "(nft-bidding-bot_|redis_data|server_data|server_logs|mongodb_data)")
 if [ ! -z "$APP_VOLUMES" ]; then
     echo -e "${YELLOW}Found application volumes:${NC}"
     echo "$APP_VOLUMES"
-    
-    echo -e "${YELLOW}Preserving MongoDB data...${NC}"
-    # Remove all volumes except MongoDB
-    VOLUMES_TO_REMOVE=$(echo "$APP_VOLUMES" | grep -v "mongodb")
+
+    echo -e "${YELLOW}Preserving MongoDB data and debug logs...${NC}"
+    # Remove all volumes except MongoDB and server_logs (debug logs)
+    VOLUMES_TO_REMOVE=$(echo "$APP_VOLUMES" | grep -v -E "(mongodb|server_logs)")
     
     if [ ! -z "$VOLUMES_TO_REMOVE" ]; then
         echo -e "${YELLOW}Removing volumes:${NC}"
@@ -370,8 +379,13 @@ if [ "$ARCH" = "arm64" ]; then
     curl -s "https://gist.githubusercontent.com/ayenisholah/753cdedf3111ea63215fb2aef7420efd/raw/f1982bc5862e1470e4aeaa0ec266cad286536a89/compose.production-arm64.yaml?_=$(uuidgen)" -o compose.yaml
 else
     echo "Detected AMD64 architecture, downloading AMD64 compose file..."
-    curl -s "https://raw.githubusercontent.com/nfttools-org/bidding-bot-installation/refs/heads/multi-chain/compose.yaml?_=$(uuidgen)" -o compose.yaml
+    curl -s "https://raw.githubusercontent.com/nfttools-org/bidding-bot-installation/refs/heads/multi-chain/compose.yaml" -o compose.yaml
 fi
+
+# Download debug script to project root
+echo -e "${YELLOW}Downloading debug script...${NC}"
+curl -s "https://raw.githubusercontent.com/nfttools-org/bidding-bot-installation/refs/heads/multi-chain/debug-container.sh" -o debug-container.sh
+chmod +x debug-container.sh
 
 # Function to get IP address
 get_ip_address() {
@@ -424,6 +438,9 @@ if [ -f .env ]; then
     update_env_var "SERVER_IP" "${SERVER_IP}"
     update_env_var "REDIS_HOST" "redis"
     update_env_var "REDIS_PORT" "6379"
+    update_env_var "MONGO_MAX_POOL_SIZE" "100"
+    update_env_var "MONGO_MIN_POOL_SIZE" "30"
+    update_env_var "DEBUG" "true"
 else
     echo -e "${YELLOW}Creating new .env file...${NC}"
     cat > .env << EOL
@@ -433,6 +450,9 @@ PORT_CLIENT=3001
 SERVER_IP=${SERVER_IP}
 REDIS_HOST=redis
 REDIS_PORT=6379
+MONGO_MAX_POOL_SIZE=100
+MONGO_MIN_POOL_SIZE=30
+DEBUG=true
 EOL
 fi
 
@@ -447,6 +467,33 @@ docker compose pull --ignore-pull-failures || {
     docker compose pull
 }
 
+# Fix debug-logs volume permissions BEFORE starting containers
+# This ensures the volume has correct permissions when the server first starts
+echo -e "${YELLOW}Setting up debug-logs volume with correct permissions...${NC}"
+
+VOLUME_NAME="nft-bidding-bot_server_logs"
+
+# Check if volume exists and is empty - if so, remove it to recreate with proper permissions
+if docker volume inspect "$VOLUME_NAME" >/dev/null 2>&1; then
+    FILE_COUNT=$(docker run --rm -v "$VOLUME_NAME":/data alpine sh -c 'find /data -type f 2>/dev/null | wc -l' 2>/dev/null || echo "0")
+    if [ "$FILE_COUNT" -eq "0" ] || [ -z "$FILE_COUNT" ]; then
+        echo "Empty or inaccessible volume detected, recreating with correct permissions..."
+        docker volume rm "$VOLUME_NAME" 2>/dev/null || true
+    fi
+fi
+
+# Create volume if it doesn't exist
+docker volume create "$VOLUME_NAME" 2>/dev/null || true
+
+# Always set permissions (handles both new and existing volumes)
+docker run --rm -v "$VOLUME_NAME":/data alpine sh -c '
+    chmod 777 /data
+    chown 1000:1000 /data
+    # Create a test file to verify write permissions
+    touch /data/.permission-test && rm /data/.permission-test
+' && echo -e "${GREEN}Debug-logs volume permissions verified${NC}" \
+  || echo -e "${RED}Warning: Could not set volume permissions${NC}"
+
 echo -e "${YELLOW}Starting services...${NC}"
 docker compose up -d
 
@@ -454,13 +501,108 @@ docker compose up -d
 echo -e "${YELLOW}Checking service health...${NC}"
 sleep 10
 
-# Fix debug-logs volume permissions (server runs as non-root user)
-echo -e "${YELLOW}Fixing debug-logs volume permissions...${NC}"
-docker exec nft-bidding-bot-server-1 sh -c 'chmod -R 777 /app/debug-logs' 2>/dev/null || true
+# Verify debug-logs permissions (backup check - run as root)
+echo -e "${YELLOW}Verifying debug-logs permissions...${NC}"
+docker exec -u root nft-bidding-bot-server-1 sh -c 'chmod 777 /app/debug-logs && chown 1000:1000 /app/debug-logs' 2>/dev/null || true
 
-# Clear debug-logs contents for fresh start (keep directory for volume mount)
-echo -e "${YELLOW}Clearing debug-logs for fresh start...${NC}"
-docker exec nft-bidding-bot-server-1 sh -c 'rm -rf /app/debug-logs/*' 2>/dev/null || true
+# Clear debug logs for fresh start after update
+echo -e "${YELLOW}Clearing debug logs for fresh start...${NC}"
+docker exec -u root nft-bidding-bot-server-1 sh -c 'rm -f /app/debug-logs/*.log' 2>/dev/null || {
+  echo -e "${YELLOW}Note: Could not clear debug logs (container may not be ready yet)${NC}"
+}
+echo -e "${GREEN}Debug logs cleared for fresh start${NC}"
+
+# Run debug script and save output to txt file
+echo -e "${YELLOW}Running container diagnostics...${NC}"
+./debug-container.sh all > debug-output.txt 2>&1
+echo -e "${GREEN}Debug output saved to debug-output.txt${NC}"
+
+# Setup debug monitoring systemd services (only on Linux with systemd)
+if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
+    echo -e "${YELLOW}Setting up debug monitoring services...${NC}"
+
+    # Create debug-monitor service (hourly snapshots)
+    sudo tee /etc/systemd/system/debug-monitor.service >/dev/null <<EOF
+[Unit]
+Description=NFT Bidding Bot Debug Monitor (Hourly Snapshots)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=$(pwd)
+ExecStart=$(pwd)/debug-container.sh monitor 3600
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Create debug-crashwatch service
+    sudo tee /etc/systemd/system/debug-crashwatch.service >/dev/null <<EOF
+[Unit]
+Description=NFT Bidding Bot Crash Watcher
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=$(pwd)
+ExecStart=$(pwd)/debug-container.sh crashes
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Enable and start services
+    sudo systemctl daemon-reload
+    sudo systemctl enable debug-monitor debug-crashwatch
+    sudo systemctl start debug-monitor debug-crashwatch
+
+    echo -e "${GREEN}Debug monitoring services started!${NC}"
+    echo "  - Hourly snapshots: systemctl status debug-monitor"
+    echo "  - Crash watcher: systemctl status debug-crashwatch"
+    echo "  - Snapshots saved to: ./debug-snapshots/"
+fi
+
+# Ensure update server is running and healthy (only on Linux with systemd)
+if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
+    echo -e "${YELLOW}Checking update server status...${NC}"
+
+    # Check if update-server service exists
+    if systemctl list-unit-files | grep -q "update-server.service"; then
+        # Service exists - check if it's running
+        if systemctl is-active --quiet update-server; then
+            echo -e "${GREEN}Update server is running${NC}"
+        else
+            echo -e "${YELLOW}Update server is not running. Starting...${NC}"
+            sudo systemctl start update-server
+            sleep 2
+        fi
+
+        # Verify health endpoint
+        echo -e "${YELLOW}Testing update server health...${NC}"
+        if curl -sf http://127.0.0.1:9999/health > /dev/null 2>&1; then
+            echo -e "${GREEN}Update server health check passed!${NC}"
+        else
+            echo -e "${RED}Update server health check failed. Restarting service...${NC}"
+            sudo systemctl restart update-server
+            sleep 3
+
+            # Final health check
+            if curl -sf http://127.0.0.1:9999/health > /dev/null 2>&1; then
+                echo -e "${GREEN}Update server recovered and healthy!${NC}"
+            else
+                echo -e "${RED}Update server still not responding. Check logs with: journalctl -u update-server${NC}"
+            fi
+        fi
+    else
+        echo -e "${YELLOW}Update server service not installed (will be set up by deployer)${NC}"
+    fi
+fi
 
 if curl -sk http://localhost:3003/health > /dev/null; then
     echo -e "${GREEN}Server is healthy!${NC}"
@@ -897,14 +1039,30 @@ log_msg "=== WRAPPER SCRIPT STARTED ==="
 log_msg "Script URL: \$SCRIPT_URL"
 echo '{"status":"running","scriptUrl":"'\$SCRIPT_URL'","startedAt":"'\$(date -Iseconds)'","wrapper":true}' > "\$STATUS_FILE"
 
-# Execute the install script with full logging
-log_msg "Downloading and executing install script..."
-curl -sL "\$SCRIPT_URL" 2>&1 | while IFS= read -r line; do
+# Download script to temp file first
+TEMP_SCRIPT="/tmp/nfttools-install-\$\$.sh"
+log_msg "Downloading script to \$TEMP_SCRIPT..."
+curl -sL "\$SCRIPT_URL" -o "\$TEMP_SCRIPT"
+CURL_STATUS=\$?
+
+if [ \$CURL_STATUS -ne 0 ]; then
+  log_msg "ERROR: Failed to download script (curl exit code: \$CURL_STATUS)"
+  echo '{"status":"failed","error":"download_failed","exitCode":'\$CURL_STATUS',"completedAt":"'\$(date -Iseconds)'"}' > "\$STATUS_FILE"
+  rm -f "\$LOCK_FILE" "\$TEMP_SCRIPT"
+  exit 1
+fi
+
+log_msg "Downloaded script successfully (\$(wc -c < \$TEMP_SCRIPT) bytes). Executing..."
+chmod +x "\$TEMP_SCRIPT"
+
+# Execute script and capture output with timestamps
+bash "\$TEMP_SCRIPT" 2>&1 | while IFS= read -r line; do
   echo "[\$(date -Iseconds)] [INFO] [OUTPUT] \$line" >> "\$LOG_FILE"
 done
 
 PIPE_STATUS=\${PIPESTATUS[0]}
-log_msg "=== WRAPPER SCRIPT COMPLETED === curl exit code: \$PIPE_STATUS"
+rm -f "\$TEMP_SCRIPT"
+log_msg "=== WRAPPER SCRIPT COMPLETED === bash exit code: \$PIPE_STATUS"
 
 if [ \$PIPE_STATUS -eq 0 ]; then
   echo '{"status":"success","exitCode":'\$PIPE_STATUS',"completedAt":"'\$(date -Iseconds)'","wrapper":true}' > "\$STATUS_FILE"

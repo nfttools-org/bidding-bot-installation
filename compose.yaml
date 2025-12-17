@@ -2,9 +2,12 @@ services:
   server:
     image: nfttools/bidding-bot-server-multi-chain:multi-chain
     platform: linux/amd64
+    user: "1000:1000"
     restart: always
     ports:
       - "3003:3003"
+    mem_limit: 6000m
+    memswap_limit: 7000m
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3003/health || exit 1"]
       interval: 30s
@@ -16,26 +19,37 @@ services:
     environment:
       NODE_ENV: "production"
       PORT: 3003
-      NODE_OPTIONS: "--max-old-space-size=4096"
+      NODE_OPTIONS: "--max-old-space-size=5500"
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       ALCHEMY_API_KEY: "PJAKTKycDCIYRTuG708Zlb55ZJMTv_jB"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
+      MONGO_MAX_POOL_SIZE: "100"
+      MONGO_MIN_POOL_SIZE: "30"
       SERVER_IP: ${SERVER_IP}
       USERNAME: ${USERNAME}
       EMAIL: ${EMAIL}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       JWT_SECRET: "NFTTOOLS TO THE MOON"
       AXIOM_DATASET: "nft-bidding-bot"
       AXIOM_TOKEN: "xaat-30ecb9c3-ce16-42f6-b824-ba8ef5c50e7c"
       API_KEY: ${API_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       RATE_LIMIT: ${RATE_LIMIT}
+      DEBUG: ${DEBUG}
     depends_on:
       - mongodb
       - redis
     volumes:
-      - server_data:/app/data
+      - server_logs:/app/debug-logs
       - /dev/null:/app/.env:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    labels:
+      - "service=bidding-bot-server"
+      - "environment=production"
 
   client:
     image: nfttools/bidding-bot-client-multi-chain:multi-chain
@@ -48,6 +62,7 @@ services:
     environment:
       PORT: 3001
       BODY_SIZE_LIMIT: 104857600
+      ALCHEMY_API_KEY: "PJAKTKycDCIYRTuG708Zlb55ZJMTv_jB"
       NEXT_PUBLIC_ALCHEMY_API_KEY: "PJAKTKycDCIYRTuG708Zlb55ZJMTv_jB"
       NEXT_PUBLIC_API_KEY: ${API_KEY}
       NEXT_PUBLIC_AXIOM_DATASET: "nft-bidding-bot"
@@ -75,6 +90,12 @@ services:
       - "127.0.0.1:27017:27017"
     volumes:
       - mongodb_data:/data/db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 30s
@@ -109,4 +130,4 @@ services:
 volumes:
   mongodb_data:
   redis_data:
-  server_data:
+  server_logs:
