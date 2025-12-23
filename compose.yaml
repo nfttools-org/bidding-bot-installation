@@ -1,6 +1,6 @@
 services:
   server:
-    image: nfttools/bidding-bot-server-multi-chain:multi-chain
+    image: nfttools/bidding-bot-server-local-websocket:local-websocket
     platform: linux/amd64
     user: "1000:1000"
     restart: always
@@ -52,7 +52,7 @@ services:
       - "environment=production"
 
   client:
-    image: nfttools/bidding-bot-client-multi-chain:multi-chain
+    image: nfttools/bidding-bot-client-local-websocket:local-websocket
     platform: linux/amd64
     restart: always
     ports:

@@ -15,7 +15,7 @@ fi
 
 # Repository and version information
 REGISTRY="nfttools"
-VERSION="multi-chain"
+VERSION="local-websocket"
 
 echo -e "${GREEN}NFT Bidding Bot Installation Script${NC}"
 echo "----------------------------------------"
