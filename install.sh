@@ -444,6 +444,7 @@ if [ -f .env ]; then
     update_env_var "MARKETPLACE_WS_URL" "ws://ws-proxy:8080"
     update_env_var "WS_PROXY_HTTP_URL" "ws://ws-proxy:8080"
     update_env_var "OPENSEA_API_KEY" "71828e2972e04fd48b2fb8f5a42debbd"
+    update_env_var "REDIS_URI" "redis://redis:6379"
 else
     echo -e "${YELLOW}Creating new .env file...${NC}"
     cat > .env << EOL
@@ -453,6 +454,7 @@ PORT_CLIENT=3001
 SERVER_IP=${SERVER_IP}
 REDIS_HOST=redis
 REDIS_PORT=6379
+REDIS_URI=redis://redis:6379
 MONGO_MAX_POOL_SIZE=100
 MONGO_MIN_POOL_SIZE=30
 DEBUG=true

@@ -17,10 +17,11 @@ services:
       retries: 3
       start_period: 30s
     environment:
+      REDIS_URI: "redis://redis:6379"
       NODE_ENV: "production"
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
-      OPENSEA_API_KEY: ${OPENSEA_API_KEY:-71828e2972e04fd48b2fb8f5a42debbd}
+      OPENSEA_API_KEY: "71828e2972e04fd48b2fb8f5a42debbd"
     depends_on:
       - redis
     logging:
@@ -131,7 +132,7 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-        
+
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 30s
