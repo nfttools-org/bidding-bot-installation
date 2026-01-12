@@ -35,6 +35,8 @@ services:
       API_KEY: ${API_KEY}
       RATE_LIMIT: ${RATE_LIMIT}
       DEBUG: ${DEBUG}
+      MARKETPLACE_WS_URL: ${MARKETPLACE_WS_URL:-wss://nfttools-ws-proxy.nfttools.io}
+      WS_PROXY_HTTP_URL: ${WS_PROXY_HTTP_URL:-wss://nfttools-ws-proxy.nfttools.io}
     depends_on:
       - mongodb
       - redis
