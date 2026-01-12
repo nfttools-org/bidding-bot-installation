@@ -441,6 +441,8 @@ if [ -f .env ]; then
     update_env_var "MONGO_MAX_POOL_SIZE" "100"
     update_env_var "MONGO_MIN_POOL_SIZE" "30"
     update_env_var "DEBUG" "true"
+    update_env_var "MARKETPLACE_WS_URL" "ws://localhost:8080"
+    update_env_var "WS_PROXY_HTTP_URL" "ws://localhost:8080"
 else
     echo -e "${YELLOW}Creating new .env file...${NC}"
     cat > .env << EOL
@@ -453,6 +455,8 @@ REDIS_PORT=6379
 MONGO_MAX_POOL_SIZE=100
 MONGO_MIN_POOL_SIZE=30
 DEBUG=true
+MARKETPLACE_WS_URL=ws://localhost:8080
+WS_PROXY_HTTP_URL=ws://localhost:8080
 EOL
 fi
 
