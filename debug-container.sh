@@ -20,7 +20,10 @@
 #   memory      - Node.js heap and memory analysis
 #   network     - DNS resolution and API connectivity
 #   queue       - BullMQ queue and worker diagnostics
-#   crash       - Analyze recent crash/restart
+#   crash       - Analyze recent crash/restart (use 'crash save' to save report)
+#   kernel-oom  - Check kernel dmesg for OOM killer activity
+#   journal-oom - Check system journal for OOM events
+#   compose-memory - Check docker-compose memory configuration
 #   all         - Run all diagnostics
 #   watch       - Live monitoring mode
 #   export      - Export all debug info to file (with optional HTTP serve)
@@ -447,6 +450,138 @@ show_queue() {
 }
 
 # =============================================================================
+# KERNEL OOM - Check kernel OOM killer logs via dmesg
+# =============================================================================
+show_kernel_oom() {
+    print_header "KERNEL OOM LOGS (dmesg)"
+
+    # Check if we have permission to run dmesg
+    if dmesg -T &>/dev/null; then
+        OOM_DMESG=$(dmesg -T 2>/dev/null | grep -i "oom\|killed process\|out of memory" | tail -30)
+        if [ -n "$OOM_DMESG" ]; then
+            echo -e "${RED}⚠️  OOM KILLER ACTIVITY DETECTED IN KERNEL LOGS:${NC}"
+            echo ""
+            echo "$OOM_DMESG"
+            echo ""
+            echo -e "${YELLOW}Tip: OOM kills indicate the host system ran out of memory${NC}"
+            echo -e "${YELLOW}Consider adding swap space or increasing container memory limits${NC}"
+        else
+            echo -e "${GREEN}✓ No OOM killer activity found in dmesg${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Cannot access dmesg (permission denied). Try running as root:${NC}"
+        echo "  sudo ./debug-container.sh kernel-oom"
+    fi
+}
+
+# =============================================================================
+# JOURNAL OOM - Check systemd journal for OOM events
+# =============================================================================
+show_journal_oom() {
+    print_header "SYSTEM JOURNAL OOM EVENTS"
+
+    if command -v journalctl &> /dev/null; then
+        print_subheader "Last 24 Hours"
+        OOM_JOURNAL_24H=$(journalctl --since "24 hours ago" 2>/dev/null | grep -i "oom\|killed process\|out of memory" | tail -20)
+        if [ -n "$OOM_JOURNAL_24H" ]; then
+            echo -e "${RED}⚠️  OOM EVENTS IN LAST 24 HOURS:${NC}"
+            echo "$OOM_JOURNAL_24H"
+        else
+            echo -e "${GREEN}✓ No OOM events in last 24 hours${NC}"
+        fi
+
+        echo ""
+        print_subheader "Last 7 Days"
+        OOM_JOURNAL_7D=$(journalctl --since "7 days ago" 2>/dev/null | grep -i "oom\|killed process\|out of memory" | tail -20)
+        if [ -n "$OOM_JOURNAL_7D" ]; then
+            echo -e "${YELLOW}OOM EVENTS IN LAST 7 DAYS:${NC}"
+            echo "$OOM_JOURNAL_7D"
+        else
+            echo -e "${GREEN}✓ No OOM events in last 7 days${NC}"
+        fi
+    else
+        echo "journalctl not available, checking /var/log/syslog..."
+        OOM_SYSLOG=$(grep -i "oom\|killed process\|out of memory" /var/log/syslog 2>/dev/null | tail -20)
+        if [ -n "$OOM_SYSLOG" ]; then
+            echo -e "${RED}⚠️  OOM EVENTS IN SYSLOG:${NC}"
+            echo "$OOM_SYSLOG"
+        else
+            echo -e "${GREEN}✓ No OOM events in syslog${NC}"
+        fi
+    fi
+}
+
+# =============================================================================
+# COMPOSE MEMORY - Check docker-compose memory configuration
+# =============================================================================
+show_compose_memory() {
+    print_header "DOCKER COMPOSE MEMORY CONFIGURATION"
+
+    COMPOSE_FILE=""
+    for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+        if [ -f "$f" ]; then
+            COMPOSE_FILE="$f"
+            break
+        fi
+    done
+
+    if [ -n "$COMPOSE_FILE" ]; then
+        echo "Found: $COMPOSE_FILE"
+        echo ""
+
+        print_subheader "Memory-Related Settings"
+        MEM_SETTINGS=$(grep -E "mem_limit|memswap_limit|memory|shm_size|max-old-space-size|NODE_OPTIONS" "$COMPOSE_FILE" 2>/dev/null)
+        if [ -n "$MEM_SETTINGS" ]; then
+            echo "$MEM_SETTINGS"
+        else
+            echo -e "${YELLOW}⚠️  No memory limits found in compose file${NC}"
+            echo "Consider adding memory limits to prevent host OOM kills:"
+            echo ""
+            echo "  services:"
+            echo "    server:"
+            echo "      mem_limit: 4g"
+            echo "      memswap_limit: 5g"
+        fi
+
+        echo ""
+        print_subheader "Environment Variables (NODE_OPTIONS)"
+        NODE_OPTS=$(grep -A 20 "environment:" "$COMPOSE_FILE" 2>/dev/null | grep -i "node_options\|max-old-space-size")
+        if [ -n "$NODE_OPTS" ]; then
+            echo "$NODE_OPTS"
+        else
+            echo -e "${YELLOW}No NODE_OPTIONS configured${NC}"
+        fi
+    else
+        echo -e "${YELLOW}No docker-compose file found in current directory${NC}"
+        echo "Checked: docker-compose.yml, docker-compose.yaml, compose.yml, compose.yaml"
+    fi
+
+    echo ""
+    print_subheader "Container Memory Limits (Runtime)"
+    SERVER=$(get_container_name "server")
+    if docker inspect "$SERVER" &>/dev/null; then
+        MEM_LIMIT=$(docker inspect "$SERVER" --format '{{.HostConfig.Memory}}' 2>/dev/null)
+        MEM_SWAP=$(docker inspect "$SERVER" --format '{{.HostConfig.MemorySwap}}' 2>/dev/null)
+
+        if [ "$MEM_LIMIT" != "0" ] && [ -n "$MEM_LIMIT" ]; then
+            MEM_LIMIT_MB=$((MEM_LIMIT / 1024 / 1024))
+            echo "Memory Limit: ${MEM_LIMIT_MB}MB"
+        else
+            echo -e "${YELLOW}Memory Limit: UNLIMITED (no protection from host OOM)${NC}"
+        fi
+
+        if [ "$MEM_SWAP" != "0" ] && [ -n "$MEM_SWAP" ]; then
+            MEM_SWAP_MB=$((MEM_SWAP / 1024 / 1024))
+            echo "Memory+Swap Limit: ${MEM_SWAP_MB}MB"
+        else
+            echo "Memory+Swap: UNLIMITED or disabled"
+        fi
+    else
+        echo "Container not found or not running"
+    fi
+}
+
+# =============================================================================
 # ALL - Run all diagnostics
 # =============================================================================
 show_all() {
@@ -460,6 +595,9 @@ show_all() {
     show_events
     show_resources
     show_lifecycle
+    show_kernel_oom
+    show_journal_oom
+    show_compose_memory
     show_logs 50
     show_inspect
     analyze_crash
@@ -838,67 +976,302 @@ download_snapshots() {
 }
 
 # =============================================================================
-# CRASH ANALYSIS - Analyze recent crashes
+# CRASH ANALYSIS - Analyze recent crashes with severity classification
 # =============================================================================
 analyze_crash() {
+    local SAVE_REPORT="${1:-false}"
+    local REPORT_DIR="./crash-reports"
+    local TIMESTAMP=$(date +"%Y-%m-%d-%H-%M-%S")
+    local REPORT_FILE="${REPORT_DIR}/crash-report-${TIMESTAMP}.log"
+
+    # Helper function to write to both terminal and optionally to report file
+    crash_log() {
+        echo -e "$1"
+        if [ "$SAVE_REPORT" = "true" ]; then
+            # Strip color codes for file
+            echo -e "$1" | sed 's/\x1b\[[0-9;]*m//g' >> "$REPORT_FILE"
+        fi
+    }
+
+    # Create report directory if saving
+    if [ "$SAVE_REPORT" = "true" ]; then
+        mkdir -p "$REPORT_DIR"
+        crash_log "=============================================="
+        crash_log "   POST-CRASH DIAGNOSTIC REPORT"
+        crash_log "   Generated: $(date)"
+        crash_log "=============================================="
+        crash_log ""
+    fi
+
     print_header "CRASH ANALYSIS"
 
     SERVER=$(get_container_name "server")
 
-    print_subheader "Last Exit Information"
-    docker inspect "$SERVER" --format '
-Exit Code: {{.State.ExitCode}}
-OOM Killed: {{.State.OOMKilled}}
-Error: {{.State.Error}}
-Finished At: {{.State.FinishedAt}}
-' 2>/dev/null
+    # Initialize crash classification
+    local CRASH_TYPE="UNKNOWN"
+    local CRASH_SEVERITY="UNKNOWN"
 
-    # Interpret exit codes
-    exit_code=$(docker inspect --format='{{.State.ExitCode}}' "$SERVER" 2>/dev/null || echo "unknown")
-    oom_killed=$(docker inspect --format='{{.State.OOMKilled}}' "$SERVER" 2>/dev/null || echo "false")
+    # ============================================
+    # 1. Container Status
+    # ============================================
+    print_subheader "[1/8] Container Status"
 
-    print_subheader "Exit Code Analysis"
-    case "$exit_code" in
-        0)
-            echo -e "${GREEN}Exit code 0: Clean shutdown${NC}"
+    # Check if container exists
+    CONTAINER_EXISTS=$(docker ps -a --format "{{.Names}}" | grep -c "^${SERVER}$" 2>/dev/null || echo "0")
+
+    if [ "$CONTAINER_EXISTS" -eq 0 ]; then
+        crash_log "${RED}ERROR: Container '$SERVER' not found${NC}"
+        crash_log "Available containers:"
+        docker ps -a --format "table {{.Names}}\t{{.Status}}" 2>/dev/null
+        return 1
+    fi
+
+    # Get container info
+    local OOM_KILLED=$(docker inspect "$SERVER" --format '{{.State.OOMKilled}}' 2>/dev/null)
+    local EXIT_CODE=$(docker inspect "$SERVER" --format '{{.State.ExitCode}}' 2>/dev/null)
+    local RUNNING=$(docker inspect "$SERVER" --format '{{.State.Running}}' 2>/dev/null)
+    local STARTED_AT=$(docker inspect "$SERVER" --format '{{.State.StartedAt}}' 2>/dev/null)
+    local FINISHED_AT=$(docker inspect "$SERVER" --format '{{.State.FinishedAt}}' 2>/dev/null)
+    local RESTART_COUNT=$(docker inspect "$SERVER" --format '{{.RestartCount}}' 2>/dev/null)
+
+    crash_log "Running: $RUNNING"
+    crash_log "OOMKilled: $OOM_KILLED"
+    crash_log "ExitCode: $EXIT_CODE"
+    crash_log "RestartCount: $RESTART_COUNT"
+    crash_log "StartedAt: $STARTED_AT"
+    crash_log "FinishedAt: $FINISHED_AT"
+    crash_log ""
+
+    # ============================================
+    # 2. Crash Type Analysis
+    # ============================================
+    print_subheader "[2/8] Crash Type Analysis"
+
+    if [ "$OOM_KILLED" == "true" ]; then
+        CRASH_TYPE="OOM_KILL"
+        CRASH_SEVERITY="CRITICAL"
+        crash_log "${RED}*** OOM KILL DETECTED ***${NC}"
+        crash_log "The container was killed by the Out-of-Memory killer."
+        crash_log "This means the container exceeded its memory limit."
+    elif [ "$EXIT_CODE" == "137" ]; then
+        CRASH_TYPE="SIGKILL"
+        CRASH_SEVERITY="CRITICAL"
+        crash_log "${RED}*** SIGKILL (Exit 137) DETECTED ***${NC}"
+        crash_log "The container was forcefully killed (SIGKILL)."
+        crash_log "This is typically caused by:"
+        crash_log "  - Docker/system OOM killer"
+        crash_log "  - Manual 'docker kill' command"
+        crash_log "  - Host system running out of memory"
+    elif [ "$EXIT_CODE" == "139" ]; then
+        CRASH_TYPE="SIGSEGV"
+        CRASH_SEVERITY="CRITICAL"
+        crash_log "${RED}*** SEGMENTATION FAULT (Exit 139) DETECTED ***${NC}"
+        crash_log "The container crashed due to a segmentation fault."
+        crash_log "This is typically a bug in native code or memory corruption."
+    elif [ "$EXIT_CODE" == "143" ]; then
+        CRASH_TYPE="SIGTERM"
+        CRASH_SEVERITY="INFO"
+        crash_log "${GREEN}*** GRACEFUL SHUTDOWN (Exit 143) ***${NC}"
+        crash_log "The container was gracefully terminated via SIGTERM."
+        crash_log "This is normal for docker stop or system shutdown."
+    elif [ "$EXIT_CODE" == "0" ]; then
+        CRASH_TYPE="CLEAN_EXIT"
+        CRASH_SEVERITY="INFO"
+        crash_log "${GREEN}*** CLEAN EXIT (Exit 0) ***${NC}"
+        crash_log "The container exited cleanly with no errors."
+    elif [ "$EXIT_CODE" == "1" ]; then
+        CRASH_TYPE="APPLICATION_ERROR"
+        CRASH_SEVERITY="HIGH"
+        crash_log "${YELLOW}*** APPLICATION ERROR (Exit 1) ***${NC}"
+        crash_log "The application crashed with an error."
+        crash_log "Check container logs for details."
+    else
+        crash_log "${YELLOW}*** UNKNOWN EXIT CODE: $EXIT_CODE ***${NC}"
+    fi
+
+    crash_log ""
+    crash_log "Crash Type: $CRASH_TYPE"
+    crash_log "Severity: $CRASH_SEVERITY"
+    crash_log ""
+
+    # ============================================
+    # 3. Kernel OOM Logs (dmesg)
+    # ============================================
+    print_subheader "[3/8] Kernel OOM Logs (dmesg)"
+
+    # Check if we have permission to run dmesg
+    if dmesg -T &>/dev/null; then
+        local OOM_DMESG=$(dmesg -T 2>/dev/null | grep -i "oom\|killed process\|out of memory" | tail -30)
+        if [ -n "$OOM_DMESG" ]; then
+            crash_log "${RED}OOM KILLER ACTIVITY DETECTED IN KERNEL LOGS:${NC}"
+            crash_log "$OOM_DMESG"
+        else
+            crash_log "${GREEN}No OOM killer activity in dmesg${NC}"
+        fi
+    else
+        crash_log "${YELLOW}Cannot access dmesg (permission denied). Try running as root.${NC}"
+    fi
+    crash_log ""
+
+    # ============================================
+    # 4. System Journal (journalctl)
+    # ============================================
+    print_subheader "[4/8] System Journal OOM Events"
+
+    if command -v journalctl &> /dev/null; then
+        local OOM_JOURNAL=$(journalctl --since "24 hours ago" 2>/dev/null | grep -i "oom\|killed process\|out of memory" | tail -20)
+        if [ -n "$OOM_JOURNAL" ]; then
+            crash_log "${RED}OOM EVENTS IN SYSTEM JOURNAL:${NC}"
+            crash_log "$OOM_JOURNAL"
+        else
+            crash_log "${GREEN}No OOM events in journalctl (last 24 hours)${NC}"
+        fi
+    else
+        crash_log "journalctl not available"
+    fi
+    crash_log ""
+
+    # ============================================
+    # 5. Docker Events
+    # ============================================
+    print_subheader "[5/8] Docker Events (last 24 hours)"
+
+    local DOCKER_EVENTS=$(docker events --since "24h" --until "0s" --filter "container=$SERVER" --filter "event=die" --filter "event=oom" --filter "event=kill" 2>/dev/null | head -20)
+    if [ -n "$DOCKER_EVENTS" ]; then
+        crash_log "${YELLOW}Recent Docker events for $SERVER:${NC}"
+        crash_log "$DOCKER_EVENTS"
+    else
+        crash_log "${GREEN}No die/oom/kill events for this container${NC}"
+    fi
+    crash_log ""
+
+    # ============================================
+    # 6. Container Memory Configuration
+    # ============================================
+    print_subheader "[6/8] Container Memory Configuration"
+
+    local MEM_LIMIT=$(docker inspect "$SERVER" --format '{{.HostConfig.Memory}}' 2>/dev/null)
+    local MEM_SWAP=$(docker inspect "$SERVER" --format '{{.HostConfig.MemorySwap}}' 2>/dev/null)
+
+    if [ "$MEM_LIMIT" != "0" ] && [ -n "$MEM_LIMIT" ]; then
+        local MEM_LIMIT_MB=$((MEM_LIMIT / 1024 / 1024))
+        crash_log "Memory Limit: ${MEM_LIMIT_MB}MB"
+    else
+        crash_log "${YELLOW}Memory Limit: UNLIMITED (no protection from host OOM)${NC}"
+    fi
+
+    if [ "$MEM_SWAP" != "0" ] && [ -n "$MEM_SWAP" ]; then
+        local MEM_SWAP_MB=$((MEM_SWAP / 1024 / 1024))
+        crash_log "Memory+Swap Limit: ${MEM_SWAP_MB}MB"
+    else
+        crash_log "Memory+Swap: UNLIMITED or disabled"
+    fi
+    crash_log ""
+
+    # ============================================
+    # 7. Host System Memory
+    # ============================================
+    print_subheader "[7/8] Host System Memory"
+
+    free -h
+    if [ "$SAVE_REPORT" = "true" ]; then
+        free -h >> "$REPORT_FILE"
+    fi
+
+    local AVAILABLE=$(free -m | awk '/^Mem:/ {print $7}')
+    local TOTAL=$(free -m | awk '/^Mem:/ {print $2}')
+    local PERCENT_AVAILABLE=$((AVAILABLE * 100 / TOTAL))
+
+    crash_log ""
+    if [ "$PERCENT_AVAILABLE" -lt 10 ]; then
+        crash_log "${RED}CRITICAL: Only ${PERCENT_AVAILABLE}% memory available (${AVAILABLE}MB of ${TOTAL}MB)${NC}"
+    elif [ "$PERCENT_AVAILABLE" -lt 20 ]; then
+        crash_log "${YELLOW}WARNING: Only ${PERCENT_AVAILABLE}% memory available (${AVAILABLE}MB of ${TOTAL}MB)${NC}"
+    else
+        crash_log "${GREEN}OK: ${PERCENT_AVAILABLE}% memory available (${AVAILABLE}MB of ${TOTAL}MB)${NC}"
+    fi
+    crash_log ""
+
+    # ============================================
+    # 8. Container Logs (last 100 lines before crash)
+    # ============================================
+    print_subheader "[8/8] Container Logs (last 100 lines)"
+
+    local CONTAINER_LOGS=$(docker logs --tail 100 "$SERVER" 2>&1)
+    crash_log "$CONTAINER_LOGS"
+    crash_log ""
+
+    # ============================================
+    # SUMMARY AND RECOMMENDATIONS
+    # ============================================
+    print_subheader "SUMMARY AND RECOMMENDATIONS"
+    crash_log ""
+
+    case "$CRASH_TYPE" in
+        "OOM_KILL"|"SIGKILL")
+            crash_log "${RED}DIAGNOSIS: Memory-related crash${NC}"
+            crash_log ""
+            crash_log "Recommendations:"
+            crash_log "  1. Increase Docker memory limit in compose.yaml:"
+            crash_log "     mem_limit: 6g"
+            crash_log "     memswap_limit: 7g"
+            crash_log ""
+            crash_log "  2. Add swap space to the host:"
+            crash_log "     sudo fallocate -l 4G /swapfile"
+            crash_log "     sudo chmod 600 /swapfile"
+            crash_log "     sudo mkswap /swapfile"
+            crash_log "     sudo swapon /swapfile"
+            crash_log ""
+            crash_log "  3. Start Node.js with --expose-gc flag for proactive GC"
+            crash_log ""
+            crash_log "  4. Check for memory leaks in application code"
+            crash_log ""
+            crash_log "  5. Monitor RSS memory (not just heap) - RSS includes native buffers"
             ;;
-        1)
-            echo -e "${YELLOW}Exit code 1: General error (check logs for details)${NC}"
+        "SIGSEGV")
+            crash_log "${RED}DIAGNOSIS: Segmentation fault - likely native code issue${NC}"
+            crash_log ""
+            crash_log "Recommendations:"
+            crash_log "  1. Check for native module issues (rebuild with npm rebuild)"
+            crash_log "  2. Update Node.js to latest LTS version"
+            crash_log "  3. Check for memory corruption issues"
             ;;
-        137)
-            echo -e "${RED}Exit code 137: SIGKILL - Process was forcefully killed${NC}"
-            if [ "$oom_killed" = "true" ]; then
-                echo -e "${RED}  ⚠️  Cause: Out of Memory (OOM) Kill${NC}"
-                echo "  Recommendation: Increase container memory limit or reduce NODE_OPTIONS --max-old-space-size"
-            else
-                echo "  Possible causes: docker kill, docker stop timeout, or system OOM killer"
-            fi
+        "APPLICATION_ERROR")
+            crash_log "${YELLOW}DIAGNOSIS: Application-level error${NC}"
+            crash_log ""
+            crash_log "Recommendations:"
+            crash_log "  1. Check container logs above for error details"
+            crash_log "  2. Check debug-logs/ folder for application logs"
+            crash_log "  3. Review recent code changes"
             ;;
-        139)
-            echo -e "${RED}Exit code 139: Segmentation fault${NC}"
-            echo "  Recommendation: Check for native module issues or memory corruption"
-            ;;
-        143)
-            echo -e "${YELLOW}Exit code 143: SIGTERM - Graceful termination requested${NC}"
-            echo "  This is typically from docker stop or system shutdown"
+        "SIGTERM"|"CLEAN_EXIT")
+            crash_log "${GREEN}DIAGNOSIS: Normal shutdown - no crash detected${NC}"
             ;;
         *)
-            echo -e "${YELLOW}Exit code $exit_code: Unknown${NC}"
+            crash_log "${YELLOW}DIAGNOSIS: Unknown crash type${NC}"
+            crash_log ""
+            crash_log "Recommendations:"
+            crash_log "  1. Check container logs for error messages"
+            crash_log "  2. Review Docker events"
+            crash_log "  3. Check host system resources"
             ;;
     esac
 
-    print_subheader "Memory at Time of Exit"
-    # Show current memory for comparison
-    docker stats --no-stream --format "{{.Name}}: {{.MemUsage}} ({{.MemPerc}})" \
-        | grep -E "(bidding|server)" || echo "Container not running"
+    crash_log ""
 
-    print_subheader "Recommendations"
-    if [ "$oom_killed" = "true" ] || [ "$exit_code" = "137" ]; then
-        echo "1. Check NODE_OPTIONS --max-old-space-size in compose.yaml"
-        echo "2. Consider increasing Docker memory limits"
-        echo "3. Check for memory leaks in recent code changes"
-        echo "4. Review the debug-logs for memory usage patterns before crash"
+    if [ "$SAVE_REPORT" = "true" ]; then
+        crash_log "=============================================="
+        crash_log "   Report saved to: $REPORT_FILE"
+        crash_log "=============================================="
+        echo -e "${GREEN}Crash report saved to: $REPORT_FILE${NC}"
     fi
+
+    # Return exit code based on crash severity
+    case "$CRASH_SEVERITY" in
+        "CRITICAL") return 2 ;;
+        "HIGH") return 1 ;;
+        *) return 0 ;;
+    esac
 }
 
 # =============================================================================
@@ -952,7 +1325,16 @@ main() {
             export_debug "${2:-false}" "${3:-8888}" "${4:-300}"
             ;;
         crash)
-            analyze_crash
+            analyze_crash "${2:-false}"
+            ;;
+        kernel-oom)
+            show_kernel_oom
+            ;;
+        journal-oom)
+            show_journal_oom
+            ;;
+        compose-memory)
+            show_compose_memory
             ;;
         snapshot)
             output=$(take_snapshot "${2:-manual}")
@@ -991,7 +1373,10 @@ main() {
             echo "  memory       - Node.js heap and memory analysis"
             echo "  network      - DNS resolution and API connectivity"
             echo "  queue        - BullMQ queue and worker diagnostics"
-            echo "  crash        - Analyze recent crash/restart"
+            echo "  crash [save] - Analyze recent crash/restart (save=true writes report file)"
+            echo "  kernel-oom   - Check kernel dmesg for OOM killer activity"
+            echo "  journal-oom  - Check system journal for OOM events"
+            echo "  compose-memory - Check docker-compose memory configuration"
             echo "  all          - Run all diagnostics"
             echo "  watch        - Live monitoring mode"
             echo "  export [serve] [port] - Export all debug info (optionally serve via HTTP)"
