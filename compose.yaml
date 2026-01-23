@@ -6,8 +6,8 @@ services:
     restart: always
     ports:
       - "3003:3003"
-    mem_limit: 6000m
-    memswap_limit: 7000m
+    mem_limit: 3500m
+    memswap_limit: 3500m
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3003/health || exit 1"]
       interval: 30s
@@ -19,7 +19,7 @@ services:
     environment:
       NODE_ENV: "production"
       PORT: 3003
-      NODE_OPTIONS: "--max-old-space-size=5500"
+      NODE_OPTIONS: "--max-old-space-size=3000 --expose-gc"
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       ALCHEMY_API_KEY: "Vt4-KnmnLA7XAlfDkeWij"
@@ -86,7 +86,9 @@ services:
   mongodb:
     image: "mongo:latest"
     container_name: "mongodb_container"
-    command: mongod
+    command: mongod --wiredTigerCacheSizeGB 1.5
+    mem_limit: 2500m
+    memswap_limit: 2500m
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
@@ -107,9 +109,11 @@ services:
   redis:
     image: "redis:latest"
     container_name: "redis"
+    mem_limit: 1500m
+    memswap_limit: 1500m
     command: redis-server --port 6379
       --bind 0.0.0.0
-      --maxmemory 2gb
+      --maxmemory 1200mb
       --maxmemory-policy noeviction
       --appendonly yes
       --save ""
