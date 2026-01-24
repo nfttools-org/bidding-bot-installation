@@ -21,8 +21,11 @@ services:
       # Node.js options (2GB heap + garbage collection)
       NODE_OPTIONS: "--max-old-space-size=2048 --expose-gc"
 
-      # Redis connection
-      REDIS_URI: "redis://redis:6379"
+      # Redis connection (3-layer fallback support)
+      REDIS_URI: "redis://redis:6379"   # Primary - URI format (preferred)
+      REDIS_URL: "redis://redis:6379"   # Secondary - Legacy variable name
+      REDIS_HOST: "redis"                # Tertiary - Individual params fallback
+      REDIS_PORT: "6379"
 
       # OpenSea API
       OPENSEA_API_KEY: "71828e2972e04fd48b2fb8f5a42debbd"
