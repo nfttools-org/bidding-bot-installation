@@ -2,7 +2,6 @@ services:
   ws-proxy:
     image: nfttools/nfttools-ws-proxy-local-websocket:local-websocket
     platform: linux/amd64
-    user: "1000:1000"
     restart: always
     ports:
       - "8080:8080"
@@ -31,6 +30,8 @@ services:
       # Logging
       LOG_LEVEL: "info"
       DEBUG: "true"
+    volumes:
+      - ws_proxy_logs:/app/debug-logs
     depends_on:
       - redis
     logging:
@@ -182,3 +183,4 @@ volumes:
   mongodb_data:
   redis_data:
   server_logs:
+  ws_proxy_logs:
