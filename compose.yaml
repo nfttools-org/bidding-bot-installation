@@ -2,6 +2,7 @@ services:
   ws-proxy:
     image: nfttools/nfttools-ws-proxy-local-websocket:local-websocket
     platform: linux/amd64
+    user: "1000:1000"
     restart: always
     ports:
       - "8080:8080"
@@ -53,7 +54,7 @@ services:
     environment:
       NODE_ENV: "production"
       PORT: 3003
-      NODE_OPTIONS: "--max-old-space-size=5500"
+      NODE_OPTIONS: "--max-old-space-size=5500 --expose-gc"
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       ALCHEMY_API_KEY: "PJAKTKycDCIYRTuG708Zlb55ZJMTv_jB"
@@ -70,8 +71,8 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       RATE_LIMIT: ${RATE_LIMIT}
       DEBUG: ${DEBUG}
-      MARKETPLACE_WS_URL: "ws://ws-proxy:8080"
-      WS_PROXY_HTTP_URL: "ws://ws-proxy:8080"
+      MARKETPLACE_WS_URL: "ws://localhost:8080/"
+      WS_PROXY_HTTP_URL: "ws://localhost:8080/"
     depends_on:
       - mongodb
       - redis
@@ -122,7 +123,9 @@ services:
   mongodb:
     image: "mongo:latest"
     container_name: "mongodb_container"
-    command: mongod
+    command: mongod --wiredTigerCacheSizeGB 1.5
+    mem_limit: 2500m
+    memswap_limit: 2500m
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
@@ -143,6 +146,8 @@ services:
   redis:
     image: "redis:latest"
     container_name: "redis"
+    mem_limit: 1500m
+    memswap_limit: 1500m
     command: redis-server --port 6379
       --bind 0.0.0.0
       --maxmemory 2gb
