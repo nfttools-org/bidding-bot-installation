@@ -6,11 +6,8 @@ services:
     restart: always
     ports:
       - "8080:8080"
-      - "8081:8081"
-      - "8082:8082"
-      - "9000:9000"
-    mem_limit: 4000m
-    memswap_limit: 5000m
+    mem_limit: 2500m
+    memswap_limit: 3000m
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 30s
@@ -18,11 +15,22 @@ services:
       retries: 3
       start_period: 30s
     environment:
-      REDIS_URI: "redis://redis:6379"
+      # Core settings
       NODE_ENV: "production"
-      REDIS_HOST: "redis"
-      REDIS_PORT: "6379"
+      PORT: "8080"
+
+      # Node.js options (2GB heap + garbage collection)
+      NODE_OPTIONS: "--max-old-space-size=2048 --expose-gc"
+
+      # Redis connection
+      REDIS_URI: "redis://redis:6379"
+
+      # OpenSea API
       OPENSEA_API_KEY: "71828e2972e04fd48b2fb8f5a42debbd"
+
+      # Logging
+      LOG_LEVEL: "info"
+      DEBUG: "true"
     depends_on:
       - redis
     logging:
