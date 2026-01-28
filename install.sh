@@ -520,6 +520,56 @@ docker exec -u root nft-bidding-bot-server-1 sh -c 'rm -f /app/debug-logs/*.log'
 }
 echo -e "${GREEN}Debug logs cleared for fresh start${NC}"
 
+# Cleanup obsolete MongoDB collections migrated to LRU caches (2026-01-27)
+echo -e "${YELLOW}Cleaning up obsolete MongoDB collections...${NC}"
+
+# Check if MongoDB container is running
+if docker ps --format "{{.Names}}" | grep -q "mongodb"; then
+    # Collections migrated to LRU caches
+    COLLECTIONS=(
+        "taskruntimestates"
+        "tokentraitcaches"
+        "tokentraits"
+        "raritycaches"
+        "bidlogs"
+        "approvals"
+    )
+
+    echo "Dropping ${#COLLECTIONS[@]} obsolete collections from BIDDING_BOT database..."
+
+    # Drop each collection with audit logging
+    for collection in "${COLLECTIONS[@]}"; do
+        # Get document count for audit log
+        DOC_COUNT=$(docker exec nft-bidding-bot-mongodb-1 mongosh --quiet BIDDING_BOT \
+            --eval "db.${collection}.countDocuments()" 2>/dev/null || echo "0")
+
+        # Drop collection
+        RESULT=$(docker exec nft-bidding-bot-mongodb-1 mongosh --quiet BIDDING_BOT \
+            --eval "db.${collection}.drop()" 2>&1)
+
+        if [ $? -eq 0 ]; then
+            if [ "$DOC_COUNT" != "0" ]; then
+                echo "  ✓ Dropped '${collection}' (${DOC_COUNT} documents)"
+            else
+                echo "  ✓ '${collection}' (already dropped)"
+            fi
+        else
+            # Gracefully handle "collection doesn't exist" errors
+            if [[ "$RESULT" == *"false"* ]] || [[ "$RESULT" == *"NamespaceNotFound"* ]]; then
+                echo "  ✓ '${collection}' (already dropped)"
+            else
+                echo -e "  ${YELLOW}⚠${NC} '${collection}' - $RESULT"
+            fi
+        fi
+    done
+
+    echo -e "${GREEN}MongoDB collection cleanup complete${NC}"
+else
+    echo -e "${YELLOW}MongoDB container not running, skipping collection cleanup${NC}"
+fi
+
+echo ""
+
 # Run debug script and save output to txt file
 echo -e "${YELLOW}Running container diagnostics...${NC}"
 ./debug-container.sh all > debug-output.txt 2>&1
