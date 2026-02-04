@@ -83,8 +83,8 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       RATE_LIMIT: ${RATE_LIMIT}
       DEBUG: ${DEBUG}
-      MARKETPLACE_WS_URL: "ws://localhost:8080/"
-      WS_PROXY_HTTP_URL: "ws://localhost:8080/"
+      MARKETPLACE_WS_URL: "ws://ws-proxy:8080/"
+      WS_PROXY_HTTP_URL: "ws://ws-proxy:8080/"
     depends_on:
       - mongodb
       - redis
