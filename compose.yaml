@@ -6,8 +6,8 @@ services:
     restart: always
     ports:
       - "3003:3003"
-    mem_limit: 3500m
-    memswap_limit: 3500m
+    mem_limit: 5376m
+    memswap_limit: 5376m
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3003/health || exit 1"]
       interval: 30s
@@ -19,7 +19,7 @@ services:
     environment:
       NODE_ENV: "production"
       PORT: 3003
-      NODE_OPTIONS: "--max-old-space-size=3000 --expose-gc"
+      NODE_OPTIONS: "--max-old-space-size=4352 --expose-gc"
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       ALCHEMY_API_KEY: "Vt4-KnmnLA7XAlfDkeWij"
@@ -56,6 +56,8 @@ services:
     image: nfttools/bidding-bot-client-beta-single:beta-single
     platform: linux/amd64
     restart: always
+    mem_limit: 700m
+    memswap_limit: 700m
     ports:
       - "3001:3001"
     extra_hosts:
@@ -86,9 +88,9 @@ services:
   mongodb:
     image: "mongo:latest"
     container_name: "mongodb_container"
-    command: mongod --wiredTigerCacheSizeGB 1.5
-    mem_limit: 2500m
-    memswap_limit: 2500m
+    command: mongod --wiredTigerCacheSizeGB 0.5
+    mem_limit: 768m
+    memswap_limit: 768m
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
@@ -109,11 +111,11 @@ services:
   redis:
     image: "redis:latest"
     container_name: "redis"
-    mem_limit: 1500m
-    memswap_limit: 1500m
+    mem_limit: 800m
+    memswap_limit: 800m
     command: redis-server --port 6379
       --bind 0.0.0.0
-      --maxmemory 1200mb
+      --maxmemory 600mb
       --maxmemory-policy noeviction
       --appendonly yes
       --save ""
