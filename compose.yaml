@@ -300,7 +300,18 @@ services:
         echo 'All nodes flushed. Creating cluster...'
         sleep 2
         redis-cli --cluster create redis-master-1:6379 redis-master-2:6380 redis-master-3:6381 redis-replica-1:6382 redis-replica-2:6383 redis-replica-3:6384 --cluster-replicas 1 --cluster-yes
-        echo 'Production Redis Cluster initialized!'
+        echo 'Verifying cluster is ready...'
+        for i in {1..30}; do
+          CLUSTER_STATE=\$(redis-cli -h redis-master-1 -p 6379 cluster info | grep cluster_state | cut -d: -f2 | tr -d '\r')
+          if [ \"\$CLUSTER_STATE\" = \"ok\" ]; then
+            echo 'Redis Cluster is ready and healthy!'
+            exit 0
+          fi
+          echo \"Waiting for cluster to stabilize... (\$i/30)\"
+          sleep 1
+        done
+        echo 'ERROR: Cluster failed to reach ready state after 30 seconds'
+        exit 1
       "
     depends_on:
       redis-master-1:
