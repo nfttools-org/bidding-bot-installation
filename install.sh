@@ -499,9 +499,98 @@ docker run --rm -v "$VOLUME_NAME":/data alpine sh -c '
 echo -e "${YELLOW}Starting services...${NC}"
 docker compose up -d
 
-# Check health
-echo -e "${YELLOW}Checking service health...${NC}"
+# Function to check if all Docker Compose services are healthy
+check_services_health() {
+  local unhealthy_services=$(docker compose ps --format json 2>/dev/null | jq -r 'select(.Health != "healthy" and .Health != "") | .Service' 2>/dev/null)
+  if [ -z "$unhealthy_services" ]; then
+    return 0  # All services healthy
+  else
+    return 1  # Some services unhealthy
+  fi
+}
+
+# Function to check server health with worker validation
+check_server_health() {
+  local response=$(curl -sk http://localhost:3003/api/health/workers 2>/dev/null)
+  local status=$(echo "$response" | jq -r '.status' 2>/dev/null)
+
+  if [ "$status" = "healthy" ]; then
+    return 0
+  else
+    echo "$response" | jq -r '.workers.healthy + " / " + (.workers.total | tostring) + " workers healthy"' 2>/dev/null || echo "Server not responding"
+    return 1
+  fi
+}
+
+# Function to check client health
+check_client_health() {
+  curl -sk http://localhost:3001/api/health >/dev/null 2>&1
+  return $?
+}
+
+echo "Waiting for services to initialize..."
+echo "This may take 60-90 seconds for Redis cluster initialization..."
+
+# Wait for all services to be healthy (max 120 seconds)
+WAIT_START=$(date +%s)
+MAX_WAIT=120
+while true; do
+  if check_services_health; then
+    echo "✅ All Docker services are healthy"
+    break
+  fi
+
+  ELAPSED=$(($(date +%s) - WAIT_START))
+  if [ $ELAPSED -ge $MAX_WAIT ]; then
+    echo "❌ Timeout waiting for services to be healthy after ${MAX_WAIT}s"
+    echo "Unhealthy services:"
+    docker compose ps --format json 2>/dev/null | jq -r 'select(.Health != "healthy" and .Health != "") | "  - \(.Service): \(.Health)"' 2>/dev/null || docker compose ps
+    exit 1
+  fi
+
+  echo "Waiting for services... (${ELAPSED}s / ${MAX_WAIT}s)"
+  sleep 5
+done
+
+# Additional 10-second buffer for workers to connect to Redis
+echo "Waiting additional 10 seconds for workers to connect to Redis..."
 sleep 10
+
+# Check server health with retries
+echo "Checking server health..."
+for i in {1..10}; do
+  if check_server_health; then
+    echo "✅ Server is healthy (all workers connected)"
+    break
+  fi
+
+  if [ $i -eq 10 ]; then
+    echo "❌ Server health check failed after 10 attempts"
+    echo "Check server logs: docker compose logs server"
+    exit 1
+  fi
+
+  echo "Server not ready yet, retrying... ($i/10)"
+  sleep 5
+done
+
+# Check client health with retries
+echo "Checking client health..."
+for i in {1..5}; do
+  if check_client_health; then
+    echo "✅ Client is accessible"
+    break
+  fi
+
+  if [ $i -eq 5 ]; then
+    echo "❌ Client health check failed after 5 attempts"
+    echo "Check client logs: docker compose logs client"
+    exit 1
+  fi
+
+  echo "Client not ready yet, retrying... ($i/5)"
+  sleep 3
+done
 
 # Verify debug-logs permissions (backup check - run as root)
 echo -e "${YELLOW}Verifying debug-logs permissions...${NC}"
@@ -654,18 +743,6 @@ if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
     else
         echo -e "${YELLOW}Update server service not installed (will be set up by deployer)${NC}"
     fi
-fi
-
-if curl -sk http://localhost:3003/health > /dev/null; then
-    echo -e "${GREEN}Server is healthy!${NC}"
-else
-    echo -e "${RED}Server health check failed${NC}"
-fi
-
-if curl -sk http://localhost:3001 > /dev/null; then
-    echo -e "${GREEN}Client is accessible!${NC}"
-else
-    echo -e "${RED}Client health check failed${NC}"
 fi
 
 echo -e "\n${GREEN}Installation complete!${NC}"
