@@ -290,6 +290,15 @@ services:
       bash -c "
         echo 'Waiting for Redis nodes...'
         sleep 15
+        echo 'Flushing all Redis nodes to clear existing data...'
+        redis-cli -h redis-master-1 -p 6379 FLUSHALL || echo 'Failed to flush redis-master-1'
+        redis-cli -h redis-master-2 -p 6380 FLUSHALL || echo 'Failed to flush redis-master-2'
+        redis-cli -h redis-master-3 -p 6381 FLUSHALL || echo 'Failed to flush redis-master-3'
+        redis-cli -h redis-replica-1 -p 6382 FLUSHALL || echo 'Failed to flush redis-replica-1'
+        redis-cli -h redis-replica-2 -p 6383 FLUSHALL || echo 'Failed to flush redis-replica-2'
+        redis-cli -h redis-replica-3 -p 6384 FLUSHALL || echo 'Failed to flush redis-replica-3'
+        echo 'All nodes flushed. Creating cluster...'
+        sleep 2
         redis-cli --cluster create
           redis-master-1:6379
           redis-master-2:6380
