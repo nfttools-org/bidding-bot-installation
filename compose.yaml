@@ -299,15 +299,7 @@ services:
         redis-cli -h redis-replica-3 -p 6384 FLUSHALL || echo 'Failed to flush redis-replica-3'
         echo 'All nodes flushed. Creating cluster...'
         sleep 2
-        redis-cli --cluster create
-          redis-master-1:6379
-          redis-master-2:6380
-          redis-master-3:6381
-          redis-replica-1:6382
-          redis-replica-2:6383
-          redis-replica-3:6384
-          --cluster-replicas 1
-          --cluster-yes
+        redis-cli --cluster create redis-master-1:6379 redis-master-2:6380 redis-master-3:6381 redis-replica-1:6382 redis-replica-2:6383 redis-replica-3:6384 --cluster-replicas 1 --cluster-yes
         echo 'Production Redis Cluster initialized!'
       "
     depends_on:
