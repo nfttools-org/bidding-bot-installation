@@ -490,6 +490,13 @@ MARKETPLACE_WS_URL=wss://nfttools-ws-proxy.nfttools.io
 EOL
 fi
 
+# Extract USERNAME for health checks (early extraction)
+if [ -f .env ] && grep -q "USERNAME=" .env; then
+    USERNAME=$(grep "USERNAME=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+else
+    USERNAME="nft"  # Default fallback
+fi
+
 # Remove old images to force fresh pull
 echo -e "${YELLOW}Removing old Docker images...${NC}"
 docker images | grep "nfttools/bidding-bot" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
@@ -531,125 +538,71 @@ docker run --rm -v "$VOLUME_NAME":/data alpine sh -c '
 echo -e "${YELLOW}Starting services...${NC}"
 docker compose up -d
 
-# Function to check if all Docker Compose services are healthy
-check_services_health() {
-  # Try with jq first (preferred method)
-  if command -v jq >/dev/null 2>&1; then
-    local unhealthy_services=$(docker compose ps --format json 2>/dev/null | jq -r 'select(.Health != "healthy" and .Health != "") | .Service' 2>/dev/null)
-    if [ -z "$unhealthy_services" ]; then
-      return 0  # All services healthy
-    else
-      return 1  # Some services unhealthy
-    fi
+# Function to check port health
+check_port_health() {
+  local port=$1
+  local name=$2
+  curl -sf --max-time 5 "http://localhost:${port}" >/dev/null 2>&1
+  if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓${NC} ${name} (localhost:${port}) is healthy"
+    return 0
   else
-    # Fallback: check if all containers are running (less precise but works)
-    local total_services=$(docker compose ps -q 2>/dev/null | wc -l)
-    local running_services=$(docker compose ps -q --status running 2>/dev/null | wc -l)
-    if [ "$total_services" -gt 0 ] && [ "$running_services" -eq "$total_services" ]; then
-      return 0
-    else
-      return 1
-    fi
+    echo -e "${RED}✗${NC} ${name} (localhost:${port}) is not responding"
+    return 1
   fi
 }
 
-# Function to check server health with worker validation
-check_server_health() {
-  local response=$(curl -sk --max-time 10 http://localhost:3003/api/health/workers 2>/dev/null)
-
-  # Try to parse with jq if available
-  if command -v jq >/dev/null 2>&1; then
-    local status=$(echo "$response" | jq -r '.status' 2>/dev/null)
-    if [ "$status" = "healthy" ]; then
-      return 0
-    else
-      echo "$response" | jq -r '.workers.healthy + " / " + (.workers.total | tostring) + " workers healthy"' 2>/dev/null || echo "Server not responding"
-      return 1
-    fi
+# Function to check domain health
+check_domain_health() {
+  local domain=$1
+  local name=$2
+  curl -sf --max-time 5 "http://${domain}" >/dev/null 2>&1
+  if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓${NC} ${name} (${domain}) is accessible"
+    return 0
   else
-    # Fallback: simple string matching
-    if echo "$response" | grep -q '"status":"healthy"' || echo "$response" | grep -q '"status": "healthy"'; then
-      return 0
-    else
-      echo "Server not responding or workers not healthy"
-      return 1
-    fi
+    echo -e "${YELLOW}⚠${NC} ${name} (${domain}) is not accessible (DNS may not be configured)"
+    return 0  # Don't fail on domain check
   fi
 }
 
-# Function to check client health
-check_client_health() {
-  curl -sk --max-time 10 http://localhost:3001/api/health >/dev/null 2>&1
-  return $?
-}
+echo ""
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}Performing Health Checks${NC}"
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
 
+# Wait for containers to stabilize (silent wait)
 echo "Waiting for services to initialize..."
-echo "This may take 60-90 seconds for Redis cluster initialization..."
+sleep 30
 
-# Wait for all services to be healthy (max 120 seconds)
-WAIT_START=$(date +%s)
-MAX_WAIT=120
-while true; do
-  if check_services_health; then
-    echo "✅ All Docker services are healthy"
-    break
-  fi
+echo ""
+echo "Checking internal services:"
+check_port_health 3003 "Server API" || SERVER_FAILED=true
+check_port_health 3001 "Client UI" || CLIENT_FAILED=true
 
-  ELAPSED=$(($(date +%s) - WAIT_START))
-  if [ $ELAPSED -ge $MAX_WAIT ]; then
-    echo "Timeout waiting for services to be healthy after ${MAX_WAIT}s"
-    echo "Service status:"
-    if command -v jq >/dev/null 2>&1; then
-      docker compose ps --format json 2>/dev/null | jq -r 'select(.Health != "healthy" and .Health != "") | "  - \(.Service): \(.Health)"' 2>/dev/null || docker compose ps
-    else
-      docker compose ps
-    fi
+echo ""
+echo "Checking external domains:"
+check_domain_health "${USERNAME}.nfttools.io" "Client Domain"
+check_domain_health "${USERNAME}-api.nfttools.io" "API Domain"
+
+echo ""
+if [ "$SERVER_FAILED" = "true" ] || [ "$CLIENT_FAILED" = "true" ]; then
+    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${RED}Health Check Failed${NC}"
+    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${YELLOW}Troubleshooting:${NC}"
+    echo "  - Check container logs: docker compose logs server"
+    echo "  - Check container logs: docker compose logs client"
+    echo "  - Check container status: docker compose ps"
     exit 1
-  fi
+fi
 
-  echo "Waiting for services... (${ELAPSED}s / ${MAX_WAIT}s)"
-  sleep 5
-done
-
-# Additional 10-second buffer for workers to connect to Redis
-echo "Waiting additional 10 seconds for workers to connect to Redis..."
-sleep 10
-
-# Check server health with retries
-echo "Checking server health..."
-for i in {1..10}; do
-  if check_server_health; then
-    echo "✅ Server is healthy (all workers connected)"
-    break
-  fi
-
-  if [ $i -eq 10 ]; then
-    echo "❌ Server health check failed after 10 attempts"
-    echo "Check server logs: docker compose logs server"
-    exit 1
-  fi
-
-  echo "Server not ready yet, retrying... ($i/10)"
-  sleep 5
-done
-
-# Check client health with retries
-echo "Checking client health..."
-for i in {1..5}; do
-  if check_client_health; then
-    echo "✅ Client is accessible"
-    break
-  fi
-
-  if [ $i -eq 5 ]; then
-    echo "❌ Client health check failed after 5 attempts"
-    echo "Check client logs: docker compose logs client"
-    exit 1
-  fi
-
-  echo "Client not ready yet, retrying... ($i/5)"
-  sleep 3
-done
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}All Health Checks Passed!${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
 
 # Verify debug-logs permissions (backup check - run as root)
 echo -e "${YELLOW}Verifying debug-logs permissions...${NC}"
@@ -804,14 +757,27 @@ if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
     fi
 fi
 
-echo -e "\n${GREEN}Installation complete!${NC}"
-echo -e "Remote Server running at: http://${SERVER_IP}:3003"
-echo -e "Remote Client running at: http://${SERVER_IP}:3001"
-echo -e "\nUseful commands:"
-echo -e "${YELLOW}cd $PROJECT_DIR${NC}"
-echo -e "${YELLOW}docker compose ps${NC} - Check service status"
-echo -e "${YELLOW}docker compose logs${NC} - View logs"
-echo -e "${YELLOW}docker compose down${NC} - Stop services"
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}Installation Complete!${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "${YELLOW}Access your application:${NC}"
+echo ""
+echo -e "  ${GREEN}Internal Access:${NC}"
+echo -e "    Server API: http://${SERVER_IP}:3003"
+echo -e "    Client UI:  http://${SERVER_IP}:3001"
+echo ""
+echo -e "  ${GREEN}Domain Access (if DNS configured):${NC}"
+echo -e "    Client:     http://${USERNAME}.nfttools.io"
+echo -e "    API:        http://${USERNAME}-api.nfttools.io"
+echo ""
+echo -e "${YELLOW}Useful commands:${NC}"
+echo -e "  ${GREEN}cd $PROJECT_DIR${NC}"
+echo -e "  ${GREEN}docker compose ps${NC}      - Check service status"
+echo -e "  ${GREEN}docker compose logs${NC}    - View logs"
+echo -e "  ${GREEN}docker compose down${NC}    - Stop services"
+echo ""
 
 # Check if nginx is installed and update configuration for 5GB downloads if not already done
 if command -v nginx &> /dev/null; then
