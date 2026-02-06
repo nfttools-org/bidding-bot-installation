@@ -25,6 +25,7 @@ OS=$(uname)
 ARCH=$(uname -m)
 PROCESSOR=""
 
+
 if [ "$OS" = "Darwin" ]; then
     if [ "$ARCH" = "arm64" ]; then
         PROCESSOR="Apple Silicon (M1/M2)"
@@ -82,7 +83,7 @@ if ! [ -x "$(command -v docker-compose)" ]; then
         # Get Docker version for macOS
         DOCKER_VERSION=$(docker version --format '{{.Server.Version}}' 2>/dev/null)
         MAJOR_VERSION=$(echo $DOCKER_VERSION | cut -d. -f1)
-        
+
         if [ "$MAJOR_VERSION" -ge 2 ]; then
             echo -e "${GREEN}Docker version >= 2.0.0 detected. Docker Compose is already included.${NC}"
         else
@@ -94,6 +95,37 @@ if ! [ -x "$(command -v docker-compose)" ]; then
         echo -e "${YELLOW}Installing Docker Compose...${NC}"
         sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
         sudo chmod +x /usr/local/bin/docker-compose
+    fi
+fi
+
+# Check curl installation (required for health checks and downloads)
+if ! [ -x "$(command -v curl)" ]; then
+    echo -e "${YELLOW}curl not found. Installing curl...${NC}"
+    if [ "$OS" = "Linux" ]; then
+        sudo apt-get update -qq
+        sudo apt-get install -y curl
+    elif [ "$OS" = "Darwin" ]; then
+        echo -e "${GREEN}curl should be pre-installed on macOS${NC}"
+    fi
+fi
+
+# Check jq installation (required for health checks)
+if ! [ -x "$(command -v jq)" ]; then
+    echo -e "${YELLOW}jq not found. Installing jq for health checks...${NC}"
+    if [ "$OS" = "Linux" ]; then
+        # Only update if we haven't already (from curl install)
+        if ! [ -x "$(command -v curl)" ]; then
+            sudo apt-get update -qq
+        fi
+        sudo apt-get install -y jq
+    elif [ "$OS" = "Darwin" ]; then
+        if [ -x "$(command -v brew)" ]; then
+            brew install jq
+        else
+            echo -e "${RED}Please install jq manually: https://stedolan.github.io/jq/download/${NC}"
+            echo -e "${YELLOW}Or install Homebrew first: https://brew.sh${NC}"
+            exit 1
+        fi
     fi
 fi
 
@@ -501,30 +533,53 @@ docker compose up -d
 
 # Function to check if all Docker Compose services are healthy
 check_services_health() {
-  local unhealthy_services=$(docker compose ps --format json 2>/dev/null | jq -r 'select(.Health != "healthy" and .Health != "") | .Service' 2>/dev/null)
-  if [ -z "$unhealthy_services" ]; then
-    return 0  # All services healthy
+  # Try with jq first (preferred method)
+  if command -v jq >/dev/null 2>&1; then
+    local unhealthy_services=$(docker compose ps --format json 2>/dev/null | jq -r 'select(.Health != "healthy" and .Health != "") | .Service' 2>/dev/null)
+    if [ -z "$unhealthy_services" ]; then
+      return 0  # All services healthy
+    else
+      return 1  # Some services unhealthy
+    fi
   else
-    return 1  # Some services unhealthy
+    # Fallback: check if all containers are running (less precise but works)
+    local total_services=$(docker compose ps -q 2>/dev/null | wc -l)
+    local running_services=$(docker compose ps -q --status running 2>/dev/null | wc -l)
+    if [ "$total_services" -gt 0 ] && [ "$running_services" -eq "$total_services" ]; then
+      return 0
+    else
+      return 1
+    fi
   fi
 }
 
 # Function to check server health with worker validation
 check_server_health() {
-  local response=$(curl -sk http://localhost:3003/api/health/workers 2>/dev/null)
-  local status=$(echo "$response" | jq -r '.status' 2>/dev/null)
+  local response=$(curl -sk --max-time 10 http://localhost:3003/api/health/workers 2>/dev/null)
 
-  if [ "$status" = "healthy" ]; then
-    return 0
+  # Try to parse with jq if available
+  if command -v jq >/dev/null 2>&1; then
+    local status=$(echo "$response" | jq -r '.status' 2>/dev/null)
+    if [ "$status" = "healthy" ]; then
+      return 0
+    else
+      echo "$response" | jq -r '.workers.healthy + " / " + (.workers.total | tostring) + " workers healthy"' 2>/dev/null || echo "Server not responding"
+      return 1
+    fi
   else
-    echo "$response" | jq -r '.workers.healthy + " / " + (.workers.total | tostring) + " workers healthy"' 2>/dev/null || echo "Server not responding"
-    return 1
+    # Fallback: simple string matching
+    if echo "$response" | grep -q '"status":"healthy"' || echo "$response" | grep -q '"status": "healthy"'; then
+      return 0
+    else
+      echo "Server not responding or workers not healthy"
+      return 1
+    fi
   fi
 }
 
 # Function to check client health
 check_client_health() {
-  curl -sk http://localhost:3001/api/health >/dev/null 2>&1
+  curl -sk --max-time 10 http://localhost:3001/api/health >/dev/null 2>&1
   return $?
 }
 
@@ -542,9 +597,13 @@ while true; do
 
   ELAPSED=$(($(date +%s) - WAIT_START))
   if [ $ELAPSED -ge $MAX_WAIT ]; then
-    echo "❌ Timeout waiting for services to be healthy after ${MAX_WAIT}s"
-    echo "Unhealthy services:"
-    docker compose ps --format json 2>/dev/null | jq -r 'select(.Health != "healthy" and .Health != "") | "  - \(.Service): \(.Health)"' 2>/dev/null || docker compose ps
+    echo "Timeout waiting for services to be healthy after ${MAX_WAIT}s"
+    echo "Service status:"
+    if command -v jq >/dev/null 2>&1; then
+      docker compose ps --format json 2>/dev/null | jq -r 'select(.Health != "healthy" and .Health != "") | "  - \(.Service): \(.Health)"' 2>/dev/null || docker compose ps
+    else
+      docker compose ps
+    fi
     exit 1
   fi
 
