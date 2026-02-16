@@ -21,10 +21,10 @@ services:
       # Node.js options (2GB heap + garbage collection)
       NODE_OPTIONS: "--max-old-space-size=2048 --expose-gc"
 
-      # Redis connection (3-layer fallback support)
-      REDIS_URI: "redis://redis:6379"   # Primary - URI format (preferred)
-      REDIS_URL: "redis://redis:6379"   # Secondary - Legacy variable name
-      REDIS_HOST: "redis"                # Tertiary - Individual params fallback
+      # Redis connection (3-layer fallback support) - updated to use redis-master-1
+      REDIS_URI: "redis://redis-master-1:6379"   # Primary - URI format (preferred)
+      REDIS_URL: "redis://redis-master-1:6379"   # Secondary - Legacy variable name
+      REDIS_HOST: "redis-master-1"                # Tertiary - Individual params fallback
       REDIS_PORT: "6379"
 
       # OpenSea API
@@ -36,7 +36,10 @@ services:
     volumes:
       - ws_proxy_logs:/app/debug-logs
     depends_on:
-      - redis
+      - redis-master-1
+    networks:
+      - default
+      - redis-cluster
     logging:
       driver: "json-file"
       options:
@@ -53,8 +56,8 @@ services:
     restart: always
     ports:
       - "3003:3003"
-    mem_limit: 6000m
-    memswap_limit: 7000m
+    mem_limit: 5376m
+    memswap_limit: 5376m
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3003/health || exit 1"]
       interval: 30s
@@ -66,9 +69,8 @@ services:
     environment:
       NODE_ENV: "production"
       PORT: 3003
-      NODE_OPTIONS: "--max-old-space-size=5500 --expose-gc"
-      REDIS_HOST: "redis"
-      REDIS_PORT: "6379"
+      NODE_OPTIONS: "--max-old-space-size=4352 --expose-gc"
+      REDIS_NODES: '[{"host":"redis-master-1","port":6379},{"host":"redis-master-2","port":6380},{"host":"redis-master-3","port":6381}]'
       ALCHEMY_API_KEY: "PJAKTKycDCIYRTuG708Zlb55ZJMTv_jB"
       MONGODB_URI: "mongodb://mongodb:27017/BIDDING_BOT"
       MONGO_MAX_POOL_SIZE: "100"
@@ -87,8 +89,14 @@ services:
       WS_PROXY_HTTP_URL: "ws://ws-proxy:8080/"
     depends_on:
       - mongodb
-      - redis
+      - redis-master-1
+      - redis-master-2
+      - redis-master-3
+      - redis-cluster-init
       - ws-proxy
+    networks:
+      - default
+      - redis-cluster
     volumes:
       - server_logs:/app/debug-logs
       - /dev/null:/app/.env:ro
@@ -105,6 +113,8 @@ services:
     image: nfttools/bidding-bot-client-local-websocket:local-websocket
     platform: linux/amd64
     restart: always
+    mem_limit: 700m
+    memswap_limit: 700m
     ports:
       - "3001:3001"
     extra_hosts:
@@ -135,9 +145,9 @@ services:
   mongodb:
     image: "mongo:latest"
     container_name: "mongodb_container"
-    command: mongod --wiredTigerCacheSizeGB 1.5
-    mem_limit: 2500m
-    memswap_limit: 2500m
+    command: mongod --wiredTigerCacheSizeGB 0.5
+    mem_limit: 768m
+    memswap_limit: 768m
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
@@ -155,35 +165,235 @@ services:
       retries: 3
       start_period: 40s
 
-  redis:
+  # Redis Cluster - 3 masters + 3 replicas (high availability production setup)
+  redis-master-1:
     image: "redis:latest"
-    container_name: "redis"
-    mem_limit: 1500m
-    memswap_limit: 1500m
+    container_name: "redis-master-1"
+    mem_limit: 300m
+    memswap_limit: 300m
     command: redis-server --port 6379
-      --bind 0.0.0.0
-      --maxmemory 2gb
-      --maxmemory-policy noeviction
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
       --appendonly yes
-      --save ""
+      --maxmemory 200mb
+      --maxmemory-policy noeviction
+      --bind 0.0.0.0
+      --protected-mode no
       --tcp-keepalive 60
       --timeout 0
-      --activedefrag yes
-      --protected-mode no
     ports:
       - "127.0.0.1:6379:6379"
+      - "127.0.0.1:16379:16379"
     volumes:
-      - redis_data:/data
+      - redis_master_1:/data
+    networks:
+      - redis-cluster
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "6379", "cluster", "info"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  redis-master-2:
+    image: "redis:latest"
+    container_name: "redis-master-2"
+    mem_limit: 300m
+    memswap_limit: 300m
+    command: redis-server --port 6380
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --maxmemory 200mb
+      --maxmemory-policy noeviction
+      --bind 0.0.0.0
+      --protected-mode no
+      --tcp-keepalive 60
+      --timeout 0
+    ports:
+      - "127.0.0.1:6380:6380"
+      - "127.0.0.1:16380:16380"
+    volumes:
+      - redis_master_2:/data
+    networks:
+      - redis-cluster
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6380", "cluster", "info"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  redis-master-3:
+    image: "redis:latest"
+    container_name: "redis-master-3"
+    mem_limit: 300m
+    memswap_limit: 300m
+    command: redis-server --port 6381
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --maxmemory 200mb
+      --maxmemory-policy noeviction
+      --bind 0.0.0.0
+      --protected-mode no
+      --tcp-keepalive 60
+      --timeout 0
+    ports:
+      - "127.0.0.1:6381:6381"
+      - "127.0.0.1:16381:16381"
+    volumes:
+      - redis_master_3:/data
+    networks:
+      - redis-cluster
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6381", "cluster", "info"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  redis-replica-1:
+    image: "redis:latest"
+    container_name: "redis-replica-1"
+    mem_limit: 300m
+    memswap_limit: 300m
+    command: redis-server --port 6382
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --maxmemory 200mb
+      --maxmemory-policy noeviction
+      --bind 0.0.0.0
+      --protected-mode no
+      --tcp-keepalive 60
+      --timeout 0
+    ports:
+      - "127.0.0.1:6382:6382"
+      - "127.0.0.1:16382:16382"
+    volumes:
+      - redis_replica_1:/data
+    networks:
+      - redis-cluster
+    restart: unless-stopped
+
+  redis-replica-2:
+    image: "redis:latest"
+    container_name: "redis-replica-2"
+    mem_limit: 300m
+    memswap_limit: 300m
+    command: redis-server --port 6383
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --maxmemory 200mb
+      --maxmemory-policy noeviction
+      --bind 0.0.0.0
+      --protected-mode no
+      --tcp-keepalive 60
+      --timeout 0
+    ports:
+      - "127.0.0.1:6383:6383"
+      - "127.0.0.1:16383:16383"
+    volumes:
+      - redis_replica_2:/data
+    networks:
+      - redis-cluster
+    restart: unless-stopped
+
+  redis-replica-3:
+    image: "redis:latest"
+    container_name: "redis-replica-3"
+    mem_limit: 300m
+    memswap_limit: 300m
+    command: redis-server --port 6384
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --maxmemory 200mb
+      --maxmemory-policy noeviction
+      --bind 0.0.0.0
+      --protected-mode no
+      --tcp-keepalive 60
+      --timeout 0
+    ports:
+      - "127.0.0.1:6384:6384"
+      - "127.0.0.1:16384:16384"
+    volumes:
+      - redis_replica_3:/data
+    networks:
+      - redis-cluster
+    restart: unless-stopped
+
+  # Cluster initialization (one-time setup)
+  redis-cluster-init:
+    image: "redis:latest"
+    container_name: "redis-cluster-init"
+    command: >
+      bash -c "
+        echo 'Waiting for Redis nodes...'
+        sleep 15
+        echo 'Flushing all Redis nodes to clear existing data...'
+        redis-cli -h redis-master-1 -p 6379 FLUSHALL || echo 'Failed to flush redis-master-1'
+        redis-cli -h redis-master-2 -p 6380 FLUSHALL || echo 'Failed to flush redis-master-2'
+        redis-cli -h redis-master-3 -p 6381 FLUSHALL || echo 'Failed to flush redis-master-3'
+        redis-cli -h redis-replica-1 -p 6382 FLUSHALL || echo 'Failed to flush redis-replica-1'
+        redis-cli -h redis-replica-2 -p 6383 FLUSHALL || echo 'Failed to flush redis-replica-2'
+        redis-cli -h redis-replica-3 -p 6384 FLUSHALL || echo 'Failed to flush redis-replica-3'
+        echo 'All nodes flushed. Creating cluster...'
+        sleep 2
+        redis-cli --cluster create redis-master-1:6379 redis-master-2:6380 redis-master-3:6381 redis-replica-1:6382 redis-replica-2:6383 redis-replica-3:6384 --cluster-replicas 1 --cluster-yes
+        echo 'Verifying cluster is ready...'
+        for i in {1..30}; do
+          CLUSTER_STATE=\$(redis-cli -h redis-master-1 -p 6379 cluster info | grep cluster_state | cut -d: -f2 | tr -d '\r')
+          if [ \"\$CLUSTER_STATE\" = \"ok\" ]; then
+            echo 'Redis Cluster is ready and healthy!'
+            exit 0
+          fi
+          echo \"Waiting for cluster to stabilize... (\$i/30)\"
+          sleep 1
+        done
+        echo 'ERROR: Cluster failed to reach ready state after 30 seconds'
+        exit 1
+      "
+    depends_on:
+      redis-master-1:
+        condition: service_healthy
+      redis-master-2:
+        condition: service_healthy
+      redis-master-3:
+        condition: service_healthy
+      redis-replica-1:
+        condition: service_started
+      redis-replica-2:
+        condition: service_started
+      redis-replica-3:
+        condition: service_started
+    networks:
+      - redis-cluster
 
 volumes:
   mongodb_data:
-  redis_data:
+  redis_master_1:
+  redis_master_2:
+  redis_master_3:
+  redis_replica_1:
+  redis_replica_2:
+  redis_replica_3:
   server_logs:
   ws_proxy_logs:
+
+networks:
+  redis-cluster:
+    driver: bridge
+  default:
+    driver: bridge

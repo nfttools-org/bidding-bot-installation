@@ -25,6 +25,7 @@ OS=$(uname)
 ARCH=$(uname -m)
 PROCESSOR=""
 
+
 if [ "$OS" = "Darwin" ]; then
     if [ "$ARCH" = "arm64" ]; then
         PROCESSOR="Apple Silicon (M1/M2)"
@@ -82,7 +83,7 @@ if ! [ -x "$(command -v docker-compose)" ]; then
         # Get Docker version for macOS
         DOCKER_VERSION=$(docker version --format '{{.Server.Version}}' 2>/dev/null)
         MAJOR_VERSION=$(echo $DOCKER_VERSION | cut -d. -f1)
-        
+
         if [ "$MAJOR_VERSION" -ge 2 ]; then
             echo -e "${GREEN}Docker version >= 2.0.0 detected. Docker Compose is already included.${NC}"
         else
@@ -94,6 +95,37 @@ if ! [ -x "$(command -v docker-compose)" ]; then
         echo -e "${YELLOW}Installing Docker Compose...${NC}"
         sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
         sudo chmod +x /usr/local/bin/docker-compose
+    fi
+fi
+
+# Check curl installation (required for health checks and downloads)
+if ! [ -x "$(command -v curl)" ]; then
+    echo -e "${YELLOW}curl not found. Installing curl...${NC}"
+    if [ "$OS" = "Linux" ]; then
+        sudo apt-get update -qq
+        sudo apt-get install -y curl
+    elif [ "$OS" = "Darwin" ]; then
+        echo -e "${GREEN}curl should be pre-installed on macOS${NC}"
+    fi
+fi
+
+# Check jq installation (required for health checks)
+if ! [ -x "$(command -v jq)" ]; then
+    echo -e "${YELLOW}jq not found. Installing jq for health checks...${NC}"
+    if [ "$OS" = "Linux" ]; then
+        # Only update if we haven't already (from curl install)
+        if ! [ -x "$(command -v curl)" ]; then
+            sudo apt-get update -qq
+        fi
+        sudo apt-get install -y jq
+    elif [ "$OS" = "Darwin" ]; then
+        if [ -x "$(command -v brew)" ]; then
+            brew install jq
+        else
+            echo -e "${RED}Please install jq manually: https://stedolan.github.io/jq/download/${NC}"
+            echo -e "${YELLOW}Or install Homebrew first: https://brew.sh${NC}"
+            exit 1
+        fi
     fi
 fi
 
@@ -344,8 +376,8 @@ if [ ! -z "$APP_VOLUMES" ]; then
     echo "$APP_VOLUMES"
 
     echo -e "${YELLOW}Preserving MongoDB data and debug logs...${NC}"
-    # Remove all volumes except MongoDB and server_logs (debug logs)
-    VOLUMES_TO_REMOVE=$(echo "$APP_VOLUMES" | grep -v -E "(mongodb|server_logs)")
+    # Remove all volumes except MongoDB, server_logs (debug logs), and ws_proxy_logs
+    VOLUMES_TO_REMOVE=$(echo "$APP_VOLUMES" | grep -v -E "(mongodb|server_logs|ws_proxy_logs)")
     
     if [ ! -z "$VOLUMES_TO_REMOVE" ]; then
         echo -e "${YELLOW}Removing volumes:${NC}"
@@ -436,7 +468,7 @@ if [ -f .env ]; then
     update_env_var "PORT_SERVER" "3003"
     update_env_var "PORT_CLIENT" "3001"
     update_env_var "SERVER_IP" "${SERVER_IP}"
-    update_env_var "REDIS_HOST" "redis"
+    update_env_var "REDIS_HOST" "redis-master-1"
     update_env_var "REDIS_PORT" "6379"
     update_env_var "MONGO_MAX_POOL_SIZE" "100"
     update_env_var "MONGO_MIN_POOL_SIZE" "30"
@@ -444,7 +476,7 @@ if [ -f .env ]; then
     update_env_var "MARKETPLACE_WS_URL" "ws://localhost:8080/"
     update_env_var "WS_PROXY_HTTP_URL" "ws://localhost:8080/"
     update_env_var "OPENSEA_API_KEY" "71828e2972e04fd48b2fb8f5a42debbd"
-    update_env_var "REDIS_URI" "redis://redis:6379"
+    update_env_var "REDIS_URI" "redis://redis-master-1:6379"
 else
     echo -e "${YELLOW}Creating new .env file...${NC}"
     cat > .env << EOL
@@ -452,9 +484,9 @@ MONGODB_URI=mongodb://mongodb:27017/BIDDING_BOT
 PORT_SERVER=3003
 PORT_CLIENT=3001
 SERVER_IP=${SERVER_IP}
-REDIS_HOST=redis
+REDIS_HOST=redis-master-1
 REDIS_PORT=6379
-REDIS_URI=redis://redis:6379
+REDIS_URI=redis://redis-master-1:6379
 MONGO_MAX_POOL_SIZE=100
 MONGO_MIN_POOL_SIZE=30
 DEBUG=true
@@ -462,6 +494,13 @@ MARKETPLACE_WS_URL=ws://localhost:8080/
 WS_PROXY_HTTP_URL=ws://localhost:8080/
 OPENSEA_API_KEY=71828e2972e04fd48b2fb8f5a42debbd
 EOL
+fi
+
+# Extract USERNAME for health checks (early extraction)
+if [ -f .env ] && grep -q "USERNAME=" .env; then
+    USERNAME=$(grep "USERNAME=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+else
+    USERNAME="nft"  # Default fallback
 fi
 
 # Remove old images to force fresh pull
@@ -505,9 +544,71 @@ docker run --rm -v "$VOLUME_NAME":/data alpine sh -c '
 echo -e "${YELLOW}Starting services...${NC}"
 docker compose up -d
 
-# Check health
-echo -e "${YELLOW}Checking service health...${NC}"
-sleep 10
+# Function to check port health
+check_port_health() {
+  local port=$1
+  local name=$2
+  curl -sf --max-time 5 "http://localhost:${port}" >/dev/null 2>&1
+  if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓${NC} ${name} (localhost:${port}) is healthy"
+    return 0
+  else
+    echo -e "${RED}✗${NC} ${name} (localhost:${port}) is not responding"
+    return 1
+  fi
+}
+
+# Function to check domain health
+check_domain_health() {
+  local domain=$1
+  local name=$2
+  curl -sf --max-time 5 "http://${domain}" >/dev/null 2>&1
+  if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓${NC} ${name} (${domain}) is accessible"
+    return 0
+  else
+    echo -e "${YELLOW}⚠${NC} ${name} (${domain}) is not accessible (DNS may not be configured)"
+    return 0  # Don't fail on domain check
+  fi
+}
+
+echo ""
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}Performing Health Checks${NC}"
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+# Wait for containers to stabilize (silent wait)
+echo "Waiting for services to initialize..."
+sleep 30
+
+echo ""
+echo "Checking internal services:"
+check_port_health 3003 "Server API" || SERVER_FAILED=true
+check_port_health 3001 "Client UI" || CLIENT_FAILED=true
+
+echo ""
+echo "Checking external domains:"
+check_domain_health "${USERNAME}.nfttools.io" "Client Domain"
+check_domain_health "${USERNAME}-api.nfttools.io" "API Domain"
+
+echo ""
+if [ "$SERVER_FAILED" = "true" ] || [ "$CLIENT_FAILED" = "true" ]; then
+    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${RED}Health Check Failed${NC}"
+    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${YELLOW}Troubleshooting:${NC}"
+    echo "  - Check container logs: docker compose logs server"
+    echo "  - Check container logs: docker compose logs client"
+    echo "  - Check container status: docker compose ps"
+    exit 1
+fi
+
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}All Health Checks Passed!${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
 
 # Verify debug-logs permissions (backup check - run as root)
 echo -e "${YELLOW}Verifying debug-logs permissions...${NC}"
@@ -662,26 +763,27 @@ if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
     fi
 fi
 
-if curl -sk http://localhost:3003/health > /dev/null; then
-    echo -e "${GREEN}Server is healthy!${NC}"
-else
-    echo -e "${RED}Server health check failed${NC}"
-fi
-
-if curl -sk http://localhost:3001 > /dev/null; then
-    echo -e "${GREEN}Client is accessible!${NC}"
-else
-    echo -e "${RED}Client health check failed${NC}"
-fi
-
-echo -e "\n${GREEN}Installation complete!${NC}"
-echo -e "Remote Server running at: http://${SERVER_IP}:3003"
-echo -e "Remote Client running at: http://${SERVER_IP}:3001"
-echo -e "\nUseful commands:"
-echo -e "${YELLOW}cd $PROJECT_DIR${NC}"
-echo -e "${YELLOW}docker compose ps${NC} - Check service status"
-echo -e "${YELLOW}docker compose logs${NC} - View logs"
-echo -e "${YELLOW}docker compose down${NC} - Stop services"
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}Installation Complete!${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "${YELLOW}Access your application:${NC}"
+echo ""
+echo -e "  ${GREEN}Internal Access:${NC}"
+echo -e "    Server API: http://${SERVER_IP}:3003"
+echo -e "    Client UI:  http://${SERVER_IP}:3001"
+echo ""
+echo -e "  ${GREEN}Domain Access (if DNS configured):${NC}"
+echo -e "    Client:     http://${USERNAME}.nfttools.io"
+echo -e "    API:        http://${USERNAME}-api.nfttools.io"
+echo ""
+echo -e "${YELLOW}Useful commands:${NC}"
+echo -e "  ${GREEN}cd $PROJECT_DIR${NC}"
+echo -e "  ${GREEN}docker compose ps${NC}      - Check service status"
+echo -e "  ${GREEN}docker compose logs${NC}    - View logs"
+echo -e "  ${GREEN}docker compose down${NC}    - Stop services"
+echo ""
 
 # Check if nginx is installed and update configuration for 5GB downloads if not already done
 if command -v nginx &> /dev/null; then
